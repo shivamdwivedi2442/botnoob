@@ -1,0 +1,32 @@
+name: CI Quality & Security
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  quality-and-security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm run install:all
+
+      - name: Run oxlint
+        run: npx oxlint@latest .
+
+      - name: Security Audit
+        run: npm audit --audit-level=high
+
+      - name: Build Frontend
+        run: npm run build --prefix frontend
+
+      - name: Run Tests
+        run: npm test

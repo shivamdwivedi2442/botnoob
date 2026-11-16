@@ -1,0 +1,13 @@
+{
+  "name": "botnoob-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev:all": "concurrently -n \"gateway,auth,bots,ai-proxy,billing,support,web\" -c \"cyan,magenta,blue,yellow,green,red,white\" \"npm run dev --prefix api-gateway\" \"npm run dev --prefix services/auth\" \"npm run dev --prefix services/bots\" \"npm run dev --prefix services/ai-proxy\" \"npm run dev --prefix services/billing\" \"npm run dev --prefix services/support\" \"npm run dev --prefix frontend\"",
+    "install:all": "npm install && npm install --prefix services/auth && npm install --prefix services/bots && npm install --prefix services/ai-proxy && npm install --prefix services/billing && npm install --prefix services/support && npm install --prefix frontend",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

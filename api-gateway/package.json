@@ -1,0 +1,8 @@
+{
+  "name": "api-gateway",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "echo \"gateway dev\"",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  }
+}

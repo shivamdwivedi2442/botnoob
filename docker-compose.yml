@@ -1,0 +1,115 @@
+services:
+  api-gateway:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./api-gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - auth-service
+      - bots-service
+      - ai-proxy-service
+      - billing-service
+      - support-service
+
+  auth-service:
+    build:
+      context: .
+      dockerfile: services/auth/Dockerfile
+    environment:
+      - PORT=4001
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=redis://redis:6379
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - ACCESS_TOKEN_SECRET=${ACCESS_TOKEN_SECRET:-access-secret}
+      - REFRESH_TOKEN_SECRET=${REFRESH_TOKEN_SECRET:-refresh-secret}
+    depends_on:
+      - redis
+
+  bots-service:
+    build:
+      context: .
+      dockerfile: services/bots/Dockerfile
+    environment:
+      - PORT=4002
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=redis://redis:6379
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost}
+      - ACCESS_TOKEN_SECRET=${ACCESS_TOKEN_SECRET:-access-secret}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - USE_DOCKER=${USE_DOCKER:-false}
+      - BOT_RUNNER_IMAGE=${BOT_RUNNER_IMAGE:-}
+    depends_on:
+      - redis
+
+  ai-proxy-service:
+    build:
+      context: .
+      dockerfile: services/ai-proxy/Dockerfile
+    environment:
+      - PORT=4003
+      - DATABASE_URL=${DATABASE_URL}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost}
+      - ACCESS_TOKEN_SECRET=${ACCESS_TOKEN_SECRET:-access-secret}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - MCP_PUBLIC_URL=${MCP_PUBLIC_URL:-https://mcp.botnoob.com}
+    depends_on:
+      - redis
+
+  billing-service:
+    build:
+      context: .
+      dockerfile: services/billing/Dockerfile
+    environment:
+      - PORT=4004
+      - DATABASE_URL=${DATABASE_URL}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost}
+      - ACCESS_TOKEN_SECRET=${ACCESS_TOKEN_SECRET:-access-secret}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - SWIFTUPI_BASE_URL=${SWIFTUPI_BASE_URL:-http://host.docker.internal:5000}
+      - SWIFTUPI_API_KEY=${SWIFTUPI_API_KEY}
+      - SWIFTUPI_API_SECRET=${SWIFTUPI_API_SECRET}
+      - SWIFTUPI_WEBHOOK_SECRET=${SWIFTUPI_WEBHOOK_SECRET}
+      - SWIFTUPI_CHECKOUT_URL=${SWIFTUPI_CHECKOUT_URL:-http://localhost:3000}
+      - SWIFTUPI_REDIRECT_URL=${SWIFTUPI_REDIRECT_URL:-http://localhost/dashboard?payment=success}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - redis
+
+  support-service:
+    build:
+      context: .
+      dockerfile: services/support/Dockerfile
+    environment:
+      - PORT=4005
+      - DATABASE_URL=${DATABASE_URL}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - ACCESS_TOKEN_SECRET=${ACCESS_TOKEN_SECRET:-access-secret}
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-}
+        VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY:-}
+        VITE_TURNSTILE_SITE_KEY: ${VITE_TURNSTILE_SITE_KEY:-}
+    ports:
+      - "5173:80"

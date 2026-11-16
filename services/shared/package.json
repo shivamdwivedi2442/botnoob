@@ -1,0 +1,16 @@
+{
+  "name": "@botnoob/shared",
+  "version": "1.0.0",
+  "main": "index.js",
+  "dependencies": {
+    "helmet": "^7.1.0",
+    "cors": "^2.8.5",
+    "express-rate-limit": "^7.1.5",
+    "cookie-parser": "^1.4.6",
+    "jsonwebtoken": "^9.0.2",
+    "argon2": "^0.31.2",
+    "zod": "^3.22.4",
+    "redis": "^4.6.11",
+    "crypto": "^1.0.1"
+  }
+}
