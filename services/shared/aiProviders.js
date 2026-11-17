@@ -11,7 +11,7 @@ const PROVIDER_ALIASES = {
 };
 
 const DEFAULT_MODELS = {
-  gemini: ['gemini-2.5-flash', 'gemini-2.0-flash'],
+  gemini: ['gemini-flash-latest'],
   openai: ['gpt-4o-mini'],
   anthropic: ['claude-3-5-sonnet-20241022']
 };
@@ -54,10 +54,11 @@ const geminiModelInflight = new Map();
 const geminiCacheKey = (key) => createHash('sha256').update(String(key)).digest('hex');
 
 const geminiModelScore = (name) => {
+  const lower = name.toLowerCase();
+  if (lower === 'gemini-flash-latest') return 500;
   const match = name.match(/gemini-(\d+)(?:\.(\d+))?/i);
   const major = match ? Number(match[1]) : 0;
   const minor = match?.[2] ? Number(match[2]) : 0;
-  const lower = name.toLowerCase();
   let score = major * 1000 + minor * 10;
   if (lower.includes('preview') || lower.includes('-exp')) score -= 5;
   if (lower.includes('lite')) score -= 2;
@@ -74,7 +75,7 @@ const pickGeminiFlashModels = (models) => {
 
     const name = model.name.replace(/^models\//, '');
     if (!/flash/i.test(name)) continue;
-    if (/embedding|image|tts|native-audio|audio|vision/i.test(name)) continue;
+    if (/embedding|image|tts|native-audio|audio|vision|1\.5|2\.0/i.test(name)) continue;
     names.add(name);
   }
 
@@ -84,10 +85,12 @@ const pickGeminiFlashModels = (models) => {
 const resolveGeminiModels = async (key, options = {}) => {
   const fallback = options.fallback?.length ? options.fallback : modelsFor('gemini');
   const cacheKey = geminiCacheKey(key);
-  const cached = geminiModelCache.get(cacheKey);
+  const cached = !options.forceRefresh ? geminiModelCache.get(cacheKey) : null;
 
   if (cached && cached.expiresAt > Date.now()) return cached.models;
-  if (geminiModelInflight.has(cacheKey)) return geminiModelInflight.get(cacheKey);
+  if (!options.forceRefresh && geminiModelInflight.has(cacheKey)) {
+    return geminiModelInflight.get(cacheKey);
+  }
 
   const lookup = (async () => {
     try {
@@ -114,11 +117,12 @@ const resolveGeminiModels = async (key, options = {}) => {
         throw new Error('Gemini returned no generateContent-capable flash models');
       }
 
-      geminiModelCache.set(cacheKey, { models, expiresAt: Date.now() + GEMINI_CACHE_TTL_MS });
+      const resolved = [...new Set([...models, ...fallback])];
+      geminiModelCache.set(cacheKey, { models: resolved, expiresAt: Date.now() + GEMINI_CACHE_TTL_MS });
       if (typeof options.logger === 'function') {
-        options.logger(`Gemini models resolved: ${models.join(', ')}`);
+        options.logger(`Gemini models resolved: ${resolved.join(', ')}`);
       }
-      return models;
+      return resolved;
     } catch (err) {
       const message = err?.message || String(err);
       if (typeof options.logger === 'function') {
@@ -135,6 +139,17 @@ const resolveGeminiModels = async (key, options = {}) => {
   return lookup;
 };
 
+const resolveModelsForKey = async (provider, key, options = {}) => {
+  const baseModels = modelsFor(provider);
+  if (provider === 'gemini' && key) {
+    return resolveGeminiModels(key, {
+      ...options,
+      fallback: baseModels
+    });
+  }
+  return baseModels;
+};
+
 module.exports = {
   PROVIDER_ALIASES,
   DEFAULT_MODELS,
@@ -144,5 +159,7 @@ module.exports = {
   resolveProvider,
   modelsFor,
   clearGeminiModelCache: () => geminiModelCache.clear(),
-  resolveGeminiModels
+  invalidateGeminiModelCache: (key) => geminiModelCache.delete(geminiCacheKey(key)),
+  resolveGeminiModels,
+  resolveModelsForKey
 };

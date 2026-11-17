@@ -7,8 +7,8 @@ const {
   aliasProvider,
   detectProviderFromKey,
   resolveProvider,
-  modelsFor,
-  resolveGeminiModels
+  resolveModelsForKey,
+  invalidateGeminiModelCache
 } = require('../../shared/aiProviders');
 
 const app = express();
@@ -272,8 +272,9 @@ const callProvider = async ({ provider, key, model, prompt, platform }) => {
     return textFromProvider(provider, payload);
   }
 
+  const cleanModel = String(model).replace(/^models\//, '');
   const payload = await postJson(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(cleanModel)}:generateContent?key=${encodeURIComponent(key)}`,
     {
       systemInstruction: { parts: [{ text: generationSystemPrompt }] },
       contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
@@ -309,14 +310,9 @@ const publicKey = async (row) => {
   }
 
   const provider = detected || aliasProvider(row.provider) || row.provider;
-  let models = modelsFor(provider);
-
-  if (provider === 'gemini' && plainKey) {
-    models = await resolveGeminiModels(plainKey, {
-      fallback: models,
-      logger: (message) => console.log(message)
-    });
-  }
+  const models = await resolveModelsForKey(provider, plainKey, {
+    logger: (message) => console.log(message)
+  });
 
   return {
     id: row.id,
@@ -467,7 +463,10 @@ app.post('/ai/generate-bot', auth, generateLimiter, async (req, res) => {
       });
     }
 
-    const models = modelsFor(savedKey.provider);
+    const models = await resolveModelsForKey(savedKey.provider, savedKey.key, {
+      logger: (message) => console.log(message)
+    });
+
     if (models.length === 0) {
       return res.status(400).json({
         error: 'Unsupported BYOK provider',
@@ -476,7 +475,7 @@ app.post('/ai/generate-bot', auth, generateLimiter, async (req, res) => {
     }
 
     let lastError = null;
-    for (const model of models.slice(0, 2)) {
+    for (const model of models) {
       try {
         const text = await callProvider({
           provider: savedKey.provider,
@@ -495,20 +494,29 @@ app.post('/ai/generate-bot', auth, generateLimiter, async (req, res) => {
         });
       } catch (err) {
         lastError = err;
+        console.warn(`Model ${model} (${savedKey.provider}) failed: ${err.message}`);
+        if (err.status === 404 && savedKey.provider === 'gemini') {
+          invalidateGeminiModelCache(savedKey.key);
+        }
         if (err.status === 401 || err.status === 403) break;
       }
     }
 
     const detail = lastError?.upstream?.slice(0, 500) || lastError?.message || 'AI provider did not return a bot';
     console.error('Bot generation failed:', detail);
-    return res.status(502).json({
+    const statusCode = lastError?.status === 401 || lastError?.status === 403 ? 400 : 422;
+    return res.status(statusCode).json({
       error: 'Bot generation failed',
-      message: 'The AI provider could not generate a usable bot. Please try again.',
+      message:
+        statusCode === 400
+          ? 'Your saved AI API key was rejected by the provider. Please update it in Dashboard -> BYOK & MCP.'
+          : 'The AI provider could not generate a usable bot. Please try again.',
+      code: statusCode === 400 ? 'INVALID_PROVIDER_KEY' : 'PROVIDER_GENERATION_FAILED',
       details: detail
     });
   } catch (err) {
     console.error('Bot generation failed:', err.message);
-    res.status(500).json({
+    res.status(422).json({
       error: 'Bot generation failed',
       message: err.message
     });

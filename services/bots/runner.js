@@ -21,6 +21,7 @@ const DISCORD_API = 'https://discord.com/api/v10';
 const DISCORD_INTENTS = 1 | 512 | 32768;
 const GEMINI_FAST_MODELS = [
   'gemini-2.5-flash',
+  'gemini-flash-latest',
   'gemini-3-flash-preview',
   'gemini-3.7-flash',
   'gemini-3.8-flash'

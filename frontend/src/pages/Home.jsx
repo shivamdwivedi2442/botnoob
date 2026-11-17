@@ -17,7 +17,7 @@ const techBadges = [
 
 const Home = () => {
   useSEO({
-    title: 'Botnoob',
+    title: 'Flagship AI Bot Studio & Automation Platform',
     description: 'Deploy professional AI bots in seconds. The ultimate studio for Telegram, Discord, and Web automation using advanced AI models.',
     keywords: 'AI bot studio, telegram bots, discord automation, Botnoob, AI agents',
     path: '/'
