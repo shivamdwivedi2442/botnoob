@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Shield, Users, CreditCard, Activity, Search, Edit2, Ban, CheckCircle, Ticket, HardDrive, Cpu, AlertTriangle, Plus, Trash2, Save, X, RefreshCw, MessageSquare, Send, LayoutTemplate, Code2 } from 'lucide-react';
+import { Shield, Users, CreditCard, Search, Edit2, Ban, CheckCircle, Ticket, Cpu, AlertTriangle, Trash2, Save, X, RefreshCw, MessageSquare, Send } from 'lucide-react';
 import api from '../services/api';
 import Toast from '../components/Toast';
 
@@ -18,16 +18,6 @@ const SuperAdmin = () => {
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [replyText, setReplyText] = useState('');
   const [replying, setReplying] = useState(false);
-  const [templates, setTemplates] = useState([]);
-  const [templatesLoading, setTemplatesLoading] = useState(true);
-  const [showTemplateModal, setShowTemplateModal] = useState(false);
-  const [creatingTemplate, setCreatingTemplate] = useState(false);
-  const [newTemplate, setNewTemplate] = useState({
-    name: '',
-    platform: 'telegram',
-    description: '',
-    starter_code: ''
-  });
   const chatEndRef = useRef(null);
 
   const fetchOverview = async ({ silent = false } = {}) => {
@@ -47,22 +37,9 @@ const SuperAdmin = () => {
     }
   };
 
-  const loadTemplates = useCallback(async () => {
-    try {
-      setTemplatesLoading(true);
-      const res = await api.get('/templates');
-      setTemplates(Array.isArray(res.data) ? res.data : []);
-    } catch (err) {
-      showToast('Failed to load bot templates');
-    } finally {
-      setTemplatesLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
     fetchOverview();
-    loadTemplates();
-  }, [loadTemplates]);
+  }, []);
 
   useEffect(() => {
     if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
@@ -135,42 +112,6 @@ const SuperAdmin = () => {
       fetchOverview();
     } catch (err) {
       showToast('Failed to toggle coupon');
-    }
-  };
-
-  const handleCreateTemplate = async (e) => {
-    e?.preventDefault();
-    if (!newTemplate.name.trim()) {
-      showToast('Template name is required');
-      return;
-    }
-    setCreatingTemplate(true);
-    try {
-      await api.post('/admin/templates', {
-        name: newTemplate.name.trim(),
-        platform: newTemplate.platform,
-        description: newTemplate.description.trim(),
-        starter_code: newTemplate.starter_code
-      });
-      showToast('Template created successfully', 'success');
-      setShowTemplateModal(false);
-      setNewTemplate({ name: '', platform: 'telegram', description: '', starter_code: '' });
-      loadTemplates();
-    } catch (err) {
-      showToast(err.response?.data?.error || 'Failed to create template');
-    } finally {
-      setCreatingTemplate(false);
-    }
-  };
-
-  const handleDeleteTemplate = async (template) => {
-    if (!window.confirm(`Delete template "${template.name}"?`)) return;
-    try {
-      await api.delete(`/admin/templates/${template.id}`);
-      showToast('Template deleted', 'success');
-      loadTemplates();
-    } catch (err) {
-      showToast(err.response?.data?.error || 'Failed to delete template');
     }
   };
 
@@ -318,44 +259,6 @@ const SuperAdmin = () => {
 
              <div className="frosted-card rounded-3xl p-6 sm:p-8 border-zinc-800">
                 <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 mb-8">
-                   <h3 className="text-xl font-bold">Bot Templates</h3>
-                   <button onClick={() => setShowTemplateModal(true)} className="inline-flex items-center justify-center gap-2 px-4 py-2 bg-cyan-500 hover:bg-cyan-400 text-obsidian rounded-xl text-xs font-bold transition-all">
-                      <Plus size={14} /> Add Template
-                   </button>
-                </div>
-                {templatesLoading ? (
-                   <div className="flex items-center justify-center py-8 text-sm text-zinc-500"><RefreshCw size={16} className="animate-spin mr-2" /> Loading templates...</div>
-                ) : (
-                   <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-                      {templates.map((template) => (
-                        <div key={template.id} className="bg-obsidian border border-zinc-800 rounded-2xl p-4 flex flex-col gap-3">
-                           <div className="flex items-start justify-between gap-2">
-                              <div className="flex items-center gap-2 min-w-0">
-                                 <div className={`w-9 h-9 shrink-0 rounded-lg flex items-center justify-center ${template.platform === 'discord' ? 'bg-indigo-500/10 text-indigo-400' : 'bg-cyan-500/10 text-cyan-400'}`}>
-                                    {template.platform === 'discord' ? <MessageSquare size={16} /> : <LayoutTemplate size={16} />}
-                                 </div>
-                                 <div className="min-w-0">
-                                    <h4 className="text-sm font-bold truncate">{template.name}</h4>
-                                    <span className="text-[9px] uppercase tracking-widest font-bold text-zinc-500">{template.platform}</span>
-                                 </div>
-                              </div>
-                              {!template.is_default && (
-                                <button onClick={() => handleDeleteTemplate(template)} className="p-1.5 rounded-lg hover:bg-red-500/10 text-zinc-500 hover:text-red-400 transition-colors"><Trash2 size={14} /></button>
-                              )}
-                           </div>
-                           <p className="text-xs text-zinc-500 line-clamp-2 min-h-[2rem]">{template.description || 'No description provided.'}</p>
-                           <div className="flex items-center justify-between pt-2 border-t border-zinc-900">
-                              <span className="text-[10px] text-zinc-600 flex items-center gap-1"><Code2 size={11} /> {(template.starter_code || '').length} chars</span>
-                              {template.is_default && <span className="text-[9px] font-bold uppercase tracking-widest text-amber-500">Built-in</span>}
-                           </div>
-                        </div>
-                      ))}
-                   </div>
-                )}
-             </div>
-
-             <div className="frosted-card rounded-3xl p-6 sm:p-8 border-zinc-800">
-                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 mb-8">
                    <h3 className="text-xl font-bold">User Management</h3>
                    <div className="relative w-full sm:w-80">
                       <input type="text" placeholder="Search..." value={searchQuery ?? ''} onChange={(e) => setSearchQuery(e.target.value)} className="w-full h-10 pl-10 pr-4 bg-obsidian border border-zinc-800 rounded-lg outline-none focus:border-cyan-500 text-xs" />
@@ -434,33 +337,6 @@ const SuperAdmin = () => {
                       </div>
                    </motion.div>
                 </div>
-             )}
-
-             {showTemplateModal && (
-               <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[100] px-4 py-6 backdrop-blur-sm">
-                  <motion.form onSubmit={handleCreateTemplate} initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6 sm:p-8 w-full max-w-lg max-h-[90vh] overflow-y-auto custom-scrollbar">
-                     <div className="flex items-center justify-between mb-6">
-                        <h3 className="text-xl font-bold">Add Bot Template</h3>
-                        <button type="button" onClick={() => setShowTemplateModal(false)} className="text-zinc-500 hover:text-white"><X size={18} /></button>
-                     </div>
-                     <div className="space-y-4 mb-8">
-                        <input type="text" placeholder="Template name" value={newTemplate.name} onChange={(e) => setNewTemplate({ ...newTemplate, name: e.target.value })} className="w-full bg-obsidian border border-zinc-800 rounded-xl p-3 text-sm outline-none focus:border-cyan-500" />
-                        <select value={newTemplate.platform} onChange={(e) => setNewTemplate({ ...newTemplate, platform: e.target.value })} className="w-full bg-obsidian border border-zinc-800 rounded-xl p-3 text-sm outline-none focus:border-cyan-500">
-                           <option value="telegram">Telegram</option>
-                           <option value="discord">Discord</option>
-                        </select>
-                        <textarea placeholder="Short description" value={newTemplate.description} onChange={(e) => setNewTemplate({ ...newTemplate, description: e.target.value })} className="w-full bg-obsidian border border-zinc-800 rounded-xl p-3 text-sm outline-none focus:border-cyan-500 h-20 resize-none" />
-                        <div>
-                           <label className="block text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-2">Starter code (bot.js)</label>
-                           <textarea placeholder="process.env.BOT_TOKEN ..." value={newTemplate.starter_code} onChange={(e) => setNewTemplate({ ...newTemplate, starter_code: e.target.value })} className="w-full bg-obsidian border border-zinc-800 rounded-xl p-3 text-xs font-mono outline-none focus:border-cyan-500 h-56 resize-y" />
-                        </div>
-                     </div>
-                     <div className="flex gap-4">
-                        <button type="submit" disabled={creatingTemplate} className="flex-1 bg-cyan-500 text-black font-bold py-3 rounded-xl disabled:opacity-60 flex items-center justify-center gap-2">{creatingTemplate && <RefreshCw size={14} className="animate-spin" />} Create</button>
-                        <button type="button" onClick={() => setShowTemplateModal(false)} className="px-6 bg-zinc-800 font-bold py-3 rounded-xl">Cancel</button>
-                     </div>
-                  </motion.form>
-               </div>
              )}
           </motion.div>
         ) : (

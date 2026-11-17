@@ -40,7 +40,8 @@ const Footer = () => {
         </div>
         <div className="pt-8 border-t border-zinc-900 flex flex-col md:flex-row justify-between items-center gap-4">
           <p className="text-zinc-600 text-xs text-center md:text-left">
-            © {new Date().getFullYear()} Botnoob. Built for the decentralized future.
+            © {new Date().getFullYear()} Botnoob. Developed by 
+            <Link to="https://github.com/shivamdwivedi2442/" target='none' className="hover:text-zinc-400 transition-colors"> shivamcoder</Link>
           </p>
           <div className="flex flex-wrap justify-center gap-6 text-zinc-600 text-xs">
             <button type="button" onClick={() => setLegalDoc('privacy')} className="hover:text-zinc-400 transition-colors">Privacy Policy</button>

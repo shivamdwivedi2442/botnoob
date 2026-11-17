@@ -45,7 +45,7 @@ export function useSEO({ title, description, keywords, path }) {
       link.setAttribute('rel', 'canonical');
       document.head.appendChild(link);
     }
-    link.setAttribute('href', `https://new.tg${path || ''}`);
+    link.setAttribute('href', `https://botnoob.new.tg${path || ''}`);
 
   }, [title, description, keywords, path]);
 }

@@ -55,8 +55,6 @@ const Dashboard = () => {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [bots, setBots] = useState([]);
-  const [templates, setTemplates] = useState([]);
-  const [templatesLoading, setTemplatesLoading] = useState(true);
   const [slots, setSlots] = useState({ used: 0, limit: 10 });
   const [activePlan, setActivePlan] = useState({ name: 'free_byok', expires_at: null, max_bots: null });
   const [keys, setKeys] = useState([]);
@@ -142,17 +140,6 @@ const Dashboard = () => {
     }
   }, []);
 
-  const loadTemplates = useCallback(async () => {
-    try {
-      const res = await api.get('/templates');
-      setTemplates(Array.isArray(res.data) ? res.data : []);
-    } catch (err) {
-      setTemplates([]);
-    } finally {
-      setTemplatesLoading(false);
-    }
-  }, []);
-
   const loadTickets = useCallback(async () => {
     try {
       const res = await api.get('/support/tickets');
@@ -173,25 +160,22 @@ const Dashboard = () => {
     } catch (err) {}
   };
 
-  const openDeploy = useCallback(({ template = null, github = false } = {}) => {
-    const selected = template || templates[0] || null;
-    const base = { ...emptyBot };
-    if (selected) {
-      base.template = String(selected.id);
-      base.code = selected.starter_code || '';
-      base.platform = selected.platform === 'discord' ? 'discord' : 'telegram';
-    }
-    setNewBot(base);
+  const openDeploy = useCallback(({ github = false, code = '', platform = 'telegram' } = {}) => {
+    setNewBot({
+      ...emptyBot,
+      code,
+      platform
+    });
     setIsCreateOpen(true);
     if (github) {
       setTimeout(() => githubInputRef.current?.focus(), 80);
     }
-  }, [templates]);
+  }, []);
 
   useEffect(() => {
     if (didMountRef.current) return;
     didMountRef.current = true;
-    Promise.all([loadBots(), loadKeys(), loadTemplates(), loadTickets(), loadPlans()]).finally(() => setLoading(false));
+    Promise.all([loadBots(), loadKeys(), loadTickets(), loadPlans()]).finally(() => setLoading(false));
 
     if (location.state?.generatedBot) {
       const { generatedBot } = location.state;
@@ -199,38 +183,35 @@ const Dashboard = () => {
         ...emptyBot,
         name: generatedBot.name || '',
         platform: generatedBot.platform || 'telegram',
-        template: '',
         code: generatedBot.code || '',
         env_vars: (generatedBot.env_vars || []).reduce((acc, v) => ({ ...acc, [v]: '' }), {})
       });
       setIsCreateOpen(true);
       navigate({ pathname: location.pathname, search: location.search }, { replace: true, state: {} });
+    } else if (location.state?.templateCode) {
+      setNewBot({
+        ...emptyBot,
+        platform: location.state.platform || 'telegram',
+        code: location.state.templateCode || ''
+      });
+      setIsCreateOpen(true);
+      navigate({ pathname: location.pathname, search: location.search }, { replace: true, state: {} });
     }
-  }, [loadBots, loadKeys, loadTemplates, loadTickets, location.state, location.pathname, location.search, navigate]);
+  }, [loadBots, loadKeys, loadTickets, location.state, location.pathname, location.search, navigate]);
 
   useEffect(() => {
-    if (templatesLoading) return;
-    const templateId = searchParams.get('template');
     const openVault = searchParams.get('openVault');
     const openSupport = searchParams.get('openSupport');
-    if (!templateId && openVault !== 'true' && openSupport !== 'true') return;
+    if (openVault !== 'true' && openSupport !== 'true') return;
 
     if (openVault === 'true') setIsByokModalOpen(true);
     if (openSupport === 'true') setIsSupportOpen(true);
-    if (templateId) {
-      const match = templates.find(
-        (item) => String(item.id) === templateId || String(item.name).toLowerCase() === templateId.toLowerCase()
-      );
-      openDeploy({ template: match });
-      if (!match) showToast('That template is no longer available. Showing the default.', 'error');
-    }
 
     const next = new URLSearchParams(searchParams);
-    next.delete('template');
     next.delete('openVault');
     next.delete('openSupport');
     setSearchParams(next, { replace: true });
-  }, [templatesLoading, templates, searchParams, setSearchParams, openDeploy]);
+  }, [searchParams, setSearchParams]);
 
   useEffect(() => {
     if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
@@ -310,32 +291,20 @@ const Dashboard = () => {
     }
   };
 
-  const applyTemplate = (templateId) => {
-    const template = templates.find((item) => String(item.id) === String(templateId));
-    setNewBot((current) => ({
-      ...current,
-      template: templateId,
-      code: template?.starter_code || '',
-      platform: template?.platform === 'discord' ? 'discord' : template?.platform === 'telegram' ? 'telegram' : current.platform
-    }));
-  };
-
   const deployBot = async (e) => {
     e.preventDefault();
     setBusy('deploy');
     try {
       const githubRepoUrl = newBot.github_repo_url.trim();
-      const selectedTemplate = templates.find((item) => String(item.id) === String(newBot.template));
       const payload = {
         name: newBot.name,
         platform: newBot.platform,
         bot_token: newBot.bot_token,
         github_repo_url: githubRepoUrl,
-        template: newBot.template || undefined,
         env_vars: newBot.env_vars
       };
       if (!githubRepoUrl) {
-        payload.code = newBot.code || selectedTemplate?.starter_code || undefined;
+        payload.code = newBot.code || undefined;
       }
       const res = await api.post('/bots/deploy', payload, { timeout: 120000 });
       showToast(`"${res.data.bot?.name || newBot.name}" is live.`, 'success');
@@ -766,21 +735,14 @@ const Dashboard = () => {
                   <input ref={githubInputRef} type="url" value={newBot.github_repo_url} onChange={(e) => setNewBot({ ...newBot, github_repo_url: e.target.value })} placeholder="https://github.com/user/repo" className="w-full px-4 py-3 bg-obsidian border border-zinc-800 rounded-xl focus:border-cyan-500 outline-none text-xs font-mono" />
                   <p className="text-[10px] text-zinc-500 mt-2">Public HTTPS repositories only. We pull the repo and use its start script.</p>
                 </div>
-                {!newBot.github_repo_url.trim() ? (
-                  <div>
-                    <label className="block text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-2">Starter Template</label>
-                    <select value={newBot.template} onChange={(e) => applyTemplate(e.target.value)} disabled={templatesLoading || templates.length === 0} className="w-full px-4 py-3 bg-obsidian border border-zinc-800 rounded-xl focus:border-cyan-500 outline-none text-sm disabled:opacity-60">
-                      {templatesLoading && <option value="">Loading templates...</option>}
-                      {!templatesLoading && templates.length === 0 && <option value="">No templates available</option>}
-                      {templates.map((template) => (
-                        <option key={template.id} value={template.id}>{template.name} · {template.platform}</option>
-                      ))}
-                    </select>
-                    {newBot.code && <p className="text-[10px] text-zinc-500 mt-2 flex items-center gap-1"><Code2 size={11} /> Starter code will be deployed as bot.js</p>}
-                  </div>
-                ) : (
+                {!newBot.github_repo_url.trim() && newBot.code && (
                   <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-4 py-3 text-[11px] text-cyan-300 flex items-start gap-2">
-                    <Github size={14} className="mt-0.5 shrink-0" /> GitHub mode: the starter template is skipped and your repository code is deployed.
+                    <Code2 size={14} className="mt-0.5 shrink-0" /> Starter code will be deployed as bot.js
+                  </div>
+                )}
+                {newBot.github_repo_url.trim() && (
+                  <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-4 py-3 text-[11px] text-cyan-300 flex items-start gap-2">
+                    <Github size={14} className="mt-0.5 shrink-0" /> GitHub mode: your repository code is deployed and your bot.js is ignored.
                   </div>
                 )}
               </div>

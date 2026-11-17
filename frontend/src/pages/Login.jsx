@@ -8,7 +8,7 @@ import Toast from '../components/Toast';
 import { startOAuth } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 
-const turnstileSiteKey = import.meta.env.VITE_TURNSTILE_SITE_KEY || '1x00000000000000000000AA';
+const turnstileSiteKey = import.meta.env.VITE_TURNSTILE_SITE_KEY ;
 
 const Login = () => {
   const [email, setEmail] = useState('');

@@ -2,9 +2,9 @@ import { Monitor, Smartphone, Terminal, Download, Zap, Shield } from 'lucide-rea
 
 const StudioApp = () => {
   const platforms = [
-    { name: 'Windows', version: 'v2.0.4', icon: <Monitor />, size: '84MB' },
-    { name: 'macOS', version: 'v2.0.4 (Apple Silicon)', icon: <Monitor />, size: '78MB' },
-    { name: 'Linux', version: 'v2.0.4 (.AppImage)', icon: <Terminal />, size: '92MB' },
+    { name: 'Windows', version: 'v2.0.4', icon: <Monitor />, size: 'soon..' },
+    { name: 'macOS', version: 'v2.0.4 (Apple Silicon)', icon: <Monitor />, size: 'soon..' },
+    { name: 'Linux', version: 'v2.0.4 (.AppImage)', icon: <Terminal />, size: 'soon..' },
     { name: 'Mobile Preview', version: 'v1.2.0 (iOS/Android)', icon: <Smartphone />, size: 'Live Sync' },
   ];
 
@@ -34,7 +34,7 @@ const StudioApp = () => {
               <h3 className="font-bold mb-1">{p.name}</h3>
               <p className="text-xs text-zinc-500 mb-4">{p.version} • {p.size}</p>
               <button className="w-full py-2 bg-zinc-800 hover:bg-zinc-700 text-white text-xs font-bold rounded-lg transition-colors flex items-center justify-center gap-2">
-                <Download size={14} /> Download
+                <Download size={14} /> soon..
               </button>
             </div>
           ))}

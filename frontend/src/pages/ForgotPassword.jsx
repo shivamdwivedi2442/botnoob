@@ -5,7 +5,7 @@ import { AlertCircle, ArrowRight, Mail } from 'lucide-react';
 import Toast from '../components/Toast';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 
-const RESET_REDIRECT_URL = 'http://localhost/reset-password';
+const RESET_REDIRECT_URL = 'https://botnoob.new.tg/reset-password';
 
 const ForgotPassword = () => {
   const [step, setStep] = useState(1);

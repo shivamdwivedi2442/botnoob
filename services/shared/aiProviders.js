@@ -13,7 +13,7 @@ const PROVIDER_ALIASES = {
 const DEFAULT_MODELS = {
   gemini: ['gemini-2.5-flash', 'gemini-2.0-flash'],
   openai: ['gpt-4o-mini'],
-  anthropic: ['claude-sonnet-4-6']
+  anthropic: ['claude-3-5-sonnet-20241022']
 };
 
 const ENV_MODEL_KEYS = {

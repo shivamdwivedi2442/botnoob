@@ -4,12 +4,12 @@ Botnoob is a specialized platform for deploying, hosting, and managing AI-powere
 
 ## Key Endpoints for Agents
 
-- Homepage: https://new.tg/
-- Bot Templates: https://new.tg/templates (Source code foundations)
-- Plugins: https://new.tg/plugins (Capabilities extensions)
-- Documentation: https://new.tg/docs (API and deployment guides)
-- Blog: https://new.tg/blog (Engineering insights)
-- Pricing: https://new.tg/pricing (Plan details)
+- Homepage: https://botnoob.new.tg/
+- Bot Templates: https://botnoob.new.tg/templates (Source code foundations)
+- Plugins: https://botnoob.new.tg/plugins (Capabilities extensions)
+- Documentation: https://botnoob.new.tg/docs (API and deployment guides)
+- Blog: https://botnoob.new.tg/blog (Engineering insights)
+- Pricing: https://botnoob.new.tg/pricing (Plan details)
 
 ## Technical Stack
 - Frontend: React (Vite, Tailwind CSS, Framer Motion)
