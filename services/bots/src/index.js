@@ -164,6 +164,37 @@ const decryptEnvVars = (encrypted) => {
   }
 };
 
+const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+const formatEnvValue = (value) => {
+  const text = String(value ?? '');
+  return /^[A-Za-z0-9_./:@+\-]*$/.test(text) ? text : JSON.stringify(text);
+};
+
+const buildBotEnvFile = (customEnv, token, platform) => {
+  const entries = [];
+  for (const [key, value] of Object.entries(customEnv || {})) {
+    if (ENV_NAME_PATTERN.test(key)) entries.push([key, value]);
+  }
+
+  entries.push(['BOT_TOKEN', token]);
+  if (platform === 'telegram') {
+    entries.push(['TELEGRAM_BOT_TOKEN', token]);
+  } else if (platform === 'discord') {
+    entries.push(['DISCORD_TOKEN', token]);
+  }
+
+  return entries.map(([key, value]) => `${key}=${formatEnvValue(value)}`).join('\n') + '\n';
+};
+
+const writeBotEnvFile = (botId, contents) => {
+  const dir = repoDirFor(botId);
+  fs.mkdirSync(dir, { recursive: true });
+  const envPath = path.join(dir, '.env');
+  fs.writeFileSync(envPath, contents, { mode: 0o600 });
+  return envPath;
+};
+
 const readDiskScript = (botId) => {
   for (const file of SCRIPT_FILES) {
     const fullPath = path.join(repoDirFor(botId), file);
@@ -378,6 +409,16 @@ const startBotProcess = async (bot, { template = 'starter' } = {}) => {
   const customEnv = decryptEnvVars(bot.encrypted_env_vars);
   const customCode = typeof bot.custom_code === 'string' ? bot.custom_code : '';
   const customCodeFile = customCode.trim() ? stageCustomCode(botId, customCode) : '';
+  const envFileContents = buildBotEnvFile(customEnv, token, bot.platform);
+
+  if (repoUrl || customCodeFile) {
+    try {
+      writeBotEnvFile(botId, envFileContents);
+    } catch (err) {
+      appendLog(botId, `Could not write dashboard .env file: ${err.message}`);
+    }
+  }
+
   const tokenAliases = bot.platform === 'telegram' ? { TELEGRAM_BOT_TOKEN: token } : { DISCORD_TOKEN: token };
   const env = {
     ...process.env,
@@ -392,6 +433,8 @@ const startBotProcess = async (bot, { template = 'starter' } = {}) => {
     BOT_REPO_ROOT: REPO_ROOT,
     BOT_REPO_DIR: path.join(REPO_ROOT, botId),
     BOT_CUSTOM_CODE_FILE: customCodeFile,
+    BOT_ENV_VARS: JSON.stringify(customEnv),
+    BOT_ENV_FILE_CONTENTS: Buffer.from(envFileContents, 'utf8').toString('base64'),
     OWNER_ID: bot.owner_id,
     USE_DOCKER: String(USE_DOCKER)
   };

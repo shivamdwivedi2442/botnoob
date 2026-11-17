@@ -758,7 +758,7 @@ app.get(['/tickets', '/api/support/tickets'], auth, async (req, res) => {
 });
 
 // BOT TEMPLATES
-app.get(['/templates', '/api/templates'], async (req, res) => {
+app.get(['/api/templates', '/templates'], async (req, res) => {
   try {
     const templates = await loadTemplates();
     res.set('X-Template-Source', templateSource);
@@ -772,7 +772,7 @@ app.get(['/templates', '/api/templates'], async (req, res) => {
   }
 });
 
-app.post(['/templates', '/api/admin/templates'], auth, requireRole(['super_admin']), async (req, res) => {
+app.post(['/api/admin/templates', '/admin/templates', '/templates'], auth, requireRole(['super_admin']), async (req, res) => {
   const name = String(req.body?.name || '').trim();
   const platform = String(req.body?.platform || 'telegram').trim().toLowerCase();
   const description = String(req.body?.description || '').trim();
@@ -828,7 +828,7 @@ app.post(['/templates', '/api/admin/templates'], auth, requireRole(['super_admin
   }
 });
 
-app.delete(['/templates/:id', '/api/admin/templates/:id'], auth, requireRole(['super_admin']), async (req, res) => {
+app.delete(['/api/admin/templates/:id', '/admin/templates/:id', '/templates/:id'], auth, requireRole(['super_admin']), async (req, res) => {
   const { id } = req.params;
   if (/^default-/.test(id)) {
     return res.status(400).json({ error: 'Built-in default templates cannot be deleted' });

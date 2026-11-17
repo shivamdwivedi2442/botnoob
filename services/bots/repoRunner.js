@@ -11,7 +11,22 @@ const REPO_URL = process.env.BOT_REPO_URL || '';
 const REPO_ROOT = process.env.BOT_REPO_ROOT || path.join(os.tmpdir(), 'botnoob-repos');
 const REPO_DIR = process.env.BOT_REPO_DIR || path.join(REPO_ROOT, String(BOT_ID));
 const CUSTOM_CODE_FILE = process.env.BOT_CUSTOM_CODE_FILE || '';
+const ENV_FILE_CONTENTS = process.env.BOT_ENV_FILE_CONTENTS || '';
 const SCRIPT_FILES = ['index.js', 'bot.js'];
+const INLINE_ENTRY_FILE = 'bot.js';
+
+const parseDashboardEnv = () => {
+  try {
+    const parsed = JSON.parse(process.env.BOT_ENV_VARS || '{}');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return parsed;
+  } catch (err) {
+    console.error(`Could not parse dashboard environment variables: ${err.message}`);
+    return {};
+  }
+};
+
+const DASHBOARD_ENV = parseDashboardEnv();
 
 let appProcess = null;
 let shuttingDown = false;
@@ -71,23 +86,87 @@ const ensureRepo = async () => {
   }
 };
 
+const writeEnvFile = () => {
+  if (!ENV_FILE_CONTENTS) return;
+  fs.mkdirSync(REPO_DIR, { recursive: true });
+  fs.writeFileSync(path.join(REPO_DIR, '.env'), Buffer.from(ENV_FILE_CONTENTS, 'base64'), {
+    mode: 0o600
+  });
+  log('Wrote dashboard environment variables to .env.');
+};
+
+const usesEsmSyntax = (code) => {
+  const text = String(code || '');
+  return (
+    /(^|[\r\n;])\s*import\s+/.test(text) ||
+    /(^|[\r\n;])\s*export\s+/.test(text)
+  );
+};
+
+const ensureInlinePackageJson = (code) => {
+  const packagePath = path.join(REPO_DIR, 'package.json');
+  let pkg = null;
+
+  if (fs.existsSync(packagePath)) {
+    try {
+      pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+    } catch (err) {
+      log(`Could not parse repository package.json: ${err.message}`);
+    }
+  }
+
+  if (!pkg || typeof pkg !== 'object' || Array.isArray(pkg)) {
+    pkg = { name: `botnoob-inline-${BOT_ID}`, version: '1.0.0', private: true };
+  }
+
+  pkg.type = usesEsmSyntax(code) ? 'module' : 'commonjs';
+  fs.writeFileSync(packagePath, `${JSON.stringify(pkg, null, 2)}\n`, 'utf8');
+  log(`Wrote package.json with "type": "${pkg.type}" for inline bot code.`);
+};
+
+const ensureInlineNodeModulesLink = () => {
+  const linkPath = path.join(REPO_DIR, 'node_modules');
+
+  try {
+    fs.lstatSync(linkPath);
+    return;
+  } catch (err) {
+    // Link does not exist yet.
+  }
+
+  const candidates = [
+    process.env.BOT_NODE_MODULES,
+    path.join(__dirname, '..', 'node_modules'),
+    '/app/node_modules'
+  ];
+  const source = candidates.find((candidate) => candidate && fs.existsSync(candidate));
+
+  if (!source) {
+    log('No service node_modules directory found for inline bot dependencies.');
+    return;
+  }
+
+  try {
+    fs.symlinkSync(source, linkPath, process.platform === 'win32' ? 'junction' : 'dir');
+    log(`Linked ${linkPath} to ${source}.`);
+  } catch (err) {
+    log(`Could not link inline bot node_modules: ${err.message}`);
+  }
+};
+
 const applyCustomCode = () => {
   if (!CUSTOM_CODE_FILE) return null;
   if (!fs.existsSync(CUSTOM_CODE_FILE)) {
     throw new Error('Custom code file is missing.');
   }
 
-  let target = 'bot.js';
-  for (const candidate of SCRIPT_FILES) {
-    if (fs.existsSync(path.join(REPO_DIR, candidate))) {
-      target = candidate;
-      break;
-    }
-  }
-
-  fs.copyFileSync(CUSTOM_CODE_FILE, path.join(REPO_DIR, target));
-  log(`Wrote custom code to ${target}.`);
-  return { command: process.execPath, args: [target] };
+  const code = fs.readFileSync(CUSTOM_CODE_FILE, 'utf8');
+  fs.mkdirSync(REPO_DIR, { recursive: true });
+  fs.writeFileSync(path.join(REPO_DIR, INLINE_ENTRY_FILE), code, 'utf8');
+  ensureInlinePackageJson(code);
+  ensureInlineNodeModulesLink();
+  log(`Wrote custom code to ${INLINE_ENTRY_FILE}.`);
+  return { command: process.execPath, args: [INLINE_ENTRY_FILE] };
 };
 
 const resolveEntry = () => {
@@ -114,7 +193,10 @@ const resolveEntry = () => {
 };
 
 const buildEnv = () => {
-  const env = { ...process.env };
+  const env = { ...process.env, ...DASHBOARD_ENV };
+  env.BOT_TOKEN = BOT_TOKEN;
+  delete env.BOT_ENV_VARS;
+  delete env.BOT_ENV_FILE_CONTENTS;
   if (BOT_PLATFORM === 'telegram') {
     env.TELEGRAM_BOT_TOKEN = BOT_TOKEN;
   } else if (BOT_PLATFORM === 'discord') {
@@ -161,8 +243,14 @@ const main = async () => {
 
   log(`Repository runner started for "${BOT_NAME}" (${BOT_ID}).`);
   await ensureRepo();
+  writeEnvFile();
 
-  const entry = applyCustomCode() || resolveEntry();
+  const customEntry = applyCustomCode();
+  if (CUSTOM_CODE_FILE && !customEntry) {
+    throw new Error('Custom code exists but could not be staged; refusing to use the built-in runner.');
+  }
+
+  const entry = customEntry || resolveEntry();
   log(`Starting repository bot: ${entry.command} ${entry.args.join(' ')}`);
 
   appProcess = spawn(entry.command, entry.args, {
