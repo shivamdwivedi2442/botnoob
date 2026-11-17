@@ -1,8 +1,16 @@
 import { Calendar, User, ArrowRight, X, Clock, Tag } from 'lucide-react';
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useSEO } from '../hooks/useSEO';
 
 const Blog = () => {
+  useSEO({
+    title: 'Blog & Insights',
+    description: 'Latest updates, technical guides, and industry insights from the Botnoob engineering team.',
+    keywords: 'AI bot blog, telegram bot news, discord automation guides, Botnoob updates',
+    path: '/blog'
+  });
+
   const [selectedPost, setSelectedPost] = useState(null);
 
   const posts = [

@@ -25,11 +25,11 @@ const Navbar = () => {
   };
 
   return (
-    <nav className="sticky top-0 z-50 bg-obsidian/80 backdrop-blur-lg border-b border-zinc-800">
+    <nav className="sticky top-0 z-50 bg-obsidian/80 backdrop-blur-lg border-b border-zinc-800" aria-label="Main Navigation">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16 gap-3">
           <div className="flex items-center gap-8 min-w-0">
-            <Link to="/" onClick={closeMenus} className="flex items-center gap-2 min-w-0">
+            <Link to="/" onClick={closeMenus} className="flex items-center gap-2 min-w-0" aria-label="Botnoob home">
               <span className="text-xl font-bold bg-gradient-to-r from-cyan-400 to-indigo-500 bg-clip-text text-transparent font-mono">
                 Botnoob
               </span>
@@ -64,6 +64,9 @@ const Navbar = () => {
                 <div className="relative">
                   <button 
                     onClick={() => setDropdownOpen(!dropdownOpen)}
+                    aria-label="User profile menu"
+                    aria-haspopup="true"
+                    aria-expanded={dropdownOpen}
                     className="flex items-center gap-2 p-1 rounded-full hover:bg-zinc-800 transition-colors"
                   >
                     <div className="w-8 h-8 rounded-full bg-gradient-to-br from-cyan-500 to-indigo-500 p-[1px]">

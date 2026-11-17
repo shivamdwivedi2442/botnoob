@@ -345,7 +345,7 @@ const loadTemplates = async () => {
       }
 
       const seeded = await seedTemplates(client);
-      if (seeded.length > 0) {
+      if (seeded && seeded.length > 0) {
         templateSource = 'supabase';
         return seeded;
       }
@@ -353,29 +353,11 @@ const loadTemplates = async () => {
       templateError = `Supabase: ${err.message}`;
       console.error('Supabase template fetch failed:', err.message);
     }
+  } else {
+    templateError = 'Supabase client not configured';
   }
 
-  try {
-    await ensureTemplateTable();
-    const result = await pool.query(
-      `SELECT ${TEMPLATE_COLUMNS} FROM bot_templates ORDER BY created_at ASC`
-    );
-    if (result.rows.length > 0) {
-      templateSource = 'postgres';
-      return result.rows;
-    }
-
-    const seeded = await seedTemplates(null);
-    if (seeded.length > 0) {
-      templateSource = 'postgres';
-      return seeded;
-    }
-    return fallbackTemplates();
-  } catch (err) {
-    templateError = templateError ? `${templateError}; Postgres: ${err.message}` : `Postgres: ${err.message}`;
-    console.error('Template fetch failed:', err.message);
-    return fallbackTemplates();
-  }
+  return fallbackTemplates();
 };
 
 const syncSupabaseUsers = async () => {
@@ -785,46 +767,22 @@ app.post(['/api/admin/templates', '/admin/templates', '/templates'], auth, requi
 
   const payload = { name, platform, description, starter_code: starterCode };
   const client = getSupabaseClient();
-  let supabaseError = null;
 
-  if (client) {
-    try {
-      const { data, error } = await client
-        .from('bot_templates')
-        .insert(payload)
-        .select(TEMPLATE_COLUMNS)
-        .single();
-      if (error) throw new Error(error.message);
-      if (data) return res.status(201).json(data);
-    } catch (err) {
-      supabaseError = err.message;
-      console.error('Supabase template creation failed:', err.message);
-    }
+  if (!client) {
+    return res.status(503).json({ error: 'Supabase service is not configured' });
   }
 
   try {
-    await ensureTemplateTable();
-    const result = await pool.query(
-      `INSERT INTO bot_templates (name, platform, description, starter_code)
-       VALUES ($1, $2, $3, $4)
-       RETURNING ${TEMPLATE_COLUMNS}`,
-      [name, platform, description, starterCode]
-    );
-    const created = result.rows[0];
-    if (supabaseError) created.warning = `Supabase insert failed: ${supabaseError}`;
-    res.status(201).json(created);
+    const { data, error } = await client
+      .from('bot_templates')
+      .insert(payload)
+      .select(TEMPLATE_COLUMNS)
+      .single();
+    if (error) throw new Error(error.message);
+    return res.status(201).json(data);
   } catch (err) {
-    console.error('Template creation failed:', err.message);
-    res.status(201).json({
-      id: crypto.randomUUID(),
-      ...payload,
-      created_at: new Date().toISOString(),
-      persisted: false,
-      details: {
-        supabase: supabaseError || 'skipped: Supabase service credentials are not configured',
-        postgres: err.message
-      }
-    });
+    console.error('Supabase template creation failed:', err.message);
+    return res.status(500).json({ error: `Failed to create template: ${err.message}` });
   }
 });
 
@@ -835,42 +793,25 @@ app.delete(['/api/admin/templates/:id', '/admin/templates/:id', '/templates/:id'
   }
 
   const client = getSupabaseClient();
-  let supabaseError = null;
-
-  if (client) {
-    try {
-      const { data, error } = await client
-        .from('bot_templates')
-        .delete()
-        .eq('id', id)
-        .select('id');
-      if (error) throw new Error(error.message);
-      if (Array.isArray(data) && data.length > 0) {
-        return res.json({ message: 'Template deleted' });
-      }
-    } catch (err) {
-      supabaseError = err.message;
-      console.error('Supabase template deletion failed:', err.message);
-    }
+  if (!client) {
+    return res.status(503).json({ error: 'Supabase service is not configured' });
   }
 
   try {
-    await ensureTemplateTable();
-    const result = await pool.query('DELETE FROM bot_templates WHERE id = $1 RETURNING id', [id]);
-    if (result.rows[0]) {
-      return res.json({
-        message: 'Template deleted',
-        ...(supabaseError ? { warning: `Supabase delete failed: ${supabaseError}` } : {})
-      });
+    const { data, error } = await client
+      .from('bot_templates')
+      .delete()
+      .eq('id', id)
+      .select('id');
+    if (error) throw new Error(error.message);
+    if (Array.isArray(data) && data.length > 0) {
+      return res.json({ message: 'Template deleted' });
     }
+    return res.status(404).json({ error: 'Template not found' });
   } catch (err) {
-    console.error('Template deletion failed:', err.message);
+    console.error('Supabase template deletion failed:', err.message);
+    return res.status(500).json({ error: `Failed to delete template: ${err.message}` });
   }
-
-  res.json({
-    message: 'Template already removed',
-    ...(supabaseError ? { details: { supabase: supabaseError } } : {})
-  });
 });
 
 app.get('/health', (req, res) => res.json({ status: 'UP', service: 'admin-service' }));

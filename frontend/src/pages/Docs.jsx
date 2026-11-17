@@ -1,7 +1,15 @@
 import { Book, Code, MessageSquare, Terminal, ChevronRight, Zap, Shield, Key, Github, Bot, Layout, Cpu, Smartphone } from 'lucide-react';
 import { useState } from 'react';
+import { useSEO } from '../hooks/useSEO';
 
 const Docs = () => {
+  useSEO({
+    title: 'Documentation',
+    description: 'Learn how to build, configure, and deploy AI bots on Botnoob. Guides for Telegram API, Discord tokens, and GitHub sync.',
+    keywords: 'bot documentation, telegram bot guide, discord bot setup, AI bot configuration',
+    path: '/docs'
+  });
+
   const [activeTab, setActiveTab] = useState('Introduction');
 
   const sections = [

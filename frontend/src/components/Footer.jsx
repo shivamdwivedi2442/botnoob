@@ -6,11 +6,11 @@ const Footer = () => {
   const [legalDoc, setLegalDoc] = useState(null);
 
   return (
-    <footer className="bg-obsidian border-t border-zinc-800 py-12">
+    <footer className="bg-obsidian border-t border-zinc-800 py-12" role="contentinfo">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-8 mb-8">
           <div className="col-span-1 sm:col-span-2">
-            <Link to="/" className="text-lg font-bold bg-gradient-to-r from-cyan-400 to-indigo-500 bg-clip-text text-transparent font-mono mb-4 inline-block">
+            <Link to="/" className="text-lg font-bold bg-gradient-to-r from-cyan-400 to-indigo-500 bg-clip-text text-transparent font-mono mb-4 inline-block" aria-label="Botnoob Home">
               Botnoob
             </Link>
             <p className="text-zinc-500 text-sm max-w-xs">

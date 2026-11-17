@@ -145,6 +145,65 @@ const removeStaleContainer = (botId) =>
 const repoDirFor = (botId) => path.join(REPO_ROOT, String(botId));
 const customCodePathFor = (botId) => path.join(CUSTOM_CODE_DIR, `${botId}.js`);
 
+const ensureNodeModules = async (botId) => {
+  const repoDir = repoDirFor(botId);
+  const targetDir = path.join(repoDir, 'node_modules');
+
+  if (fs.existsSync(targetDir)) return;
+
+  const candidates = [
+    path.join(process.cwd(), 'node_modules'),
+    '/app/services/bots/node_modules',
+    '/app/node_modules'
+  ];
+
+  let sourceDir = null;
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(path.join(candidate, 'dotenv'))) {
+        sourceDir = candidate;
+        break;
+      }
+    } catch (err) {
+      // Skip
+    }
+  }
+
+  if (sourceDir) {
+    try {
+      fs.mkdirSync(repoDir, { recursive: true });
+      fs.symlinkSync(sourceDir, targetDir, 'dir');
+      appendLog(botId, `Linked dependencies from service modules`);
+      return;
+    } catch (err) {
+      console.error(`Failed to link node_modules for bot ${botId}:`, err.message);
+    }
+  }
+
+  appendLog(botId, 'Local node_modules not found, installing dependencies manually...');
+  try {
+    fs.mkdirSync(repoDir, { recursive: true });
+  } catch (err) {
+    // Ignore
+  }
+
+  return new Promise((resolve) => {
+    const npm = spawn('npm', ['install', '--no-save', 'dotenv', 'node-telegram-bot-api', 'telegraf', 'discord.js', 'axios'], {
+      cwd: repoDir,
+      shell: true
+    });
+    npm.on('close', (code) => {
+      if (code === 0) appendLog(botId, 'Dependencies installed successfully.');
+      else appendLog(botId, `NPM install exited with code ${code}`);
+      resolve();
+    });
+    npm.on('error', (err) => {
+      appendLog(botId, `Failed to start NPM install: ${err.message}`);
+      resolve();
+    });
+  });
+};
+
 const decryptEnvVars = (encrypted) => {
   if (!encrypted) return {};
 
@@ -412,6 +471,7 @@ const startBotProcess = async (bot, { template = 'starter' } = {}) => {
   const envFileContents = buildBotEnvFile(customEnv, token, bot.platform);
 
   if (repoUrl || customCodeFile) {
+    await ensureNodeModules(botId);
     try {
       writeBotEnvFile(botId, envFileContents);
     } catch (err) {

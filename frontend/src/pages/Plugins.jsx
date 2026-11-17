@@ -1,6 +1,7 @@
 import { Search, Puzzle, Star, ExternalLink, X, Copy, Check, BookOpen } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useSEO } from '../hooks/useSEO';
 
 const plugins = [
   {
@@ -130,6 +131,13 @@ if (verdict.flagged) console.log('Removed message:', verdict.reason);`,
 ];
 
 const Plugins = () => {
+  useSEO({
+    title: 'Plugin Marketplace',
+    description: 'Extend your bot with Redis cache, Claude-3.5-Sonnet MCP, Supabase auth, and Stripe payments. Official and community plugins for Botnoob.',
+    keywords: 'bot plugins, redis cache for bots, Claude MCP, bot marketplace, botnoob plugins',
+    path: '/plugins'
+  });
+
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState(null);
   const [copied, setCopied] = useState(false);

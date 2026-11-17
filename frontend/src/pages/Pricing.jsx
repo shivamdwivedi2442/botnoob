@@ -3,8 +3,16 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { useSEO } from '../hooks/useSEO';
 
 const Pricing = () => {
+  useSEO({
+    title: 'Pricing & Plans',
+    description: 'Start for free or upgrade to BYOK Pro. Transparent pricing for AI bot hosting and automation.',
+    keywords: 'AI bot pricing, telegram bot hosting cost, discord bot subscriptions, Botnoob plans',
+    path: '/pricing'
+  });
+
   const [plans, setPlans] = useState([]);
   const [loading, setLoading] = useState(true);
   const [coupon, setCoupon] = useState('');

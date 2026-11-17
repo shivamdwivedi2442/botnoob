@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Bot, MessageSquare, Globe, ArrowUpRight, Loader2, RefreshCw } from 'lucide-react';
 import api from '../services/api';
+import { useSEO } from '../hooks/useSEO';
 
 const iconFor = (template) => {
   if (template.platform === 'telegram') return <MessageSquare className="text-cyan-400" />;
@@ -11,6 +12,13 @@ const iconFor = (template) => {
 };
 
 const Templates = () => {
+  useSEO({
+    title: 'Bot Templates',
+    description: 'Explore our library of pre-built bot templates for Telegram and Discord. Deploy high-performance AI bots in seconds.',
+    keywords: 'bot templates, telegram bot source code, discord bot templates, AI bot foundation',
+    path: '/templates'
+  });
+
   const navigate = useNavigate();
   const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(true);

@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { useSEO } from '../hooks/useSEO';
 
 const techBadges = [
   { label: 'Telegram API', icon: MessageSquare, to: '/docs' },
@@ -15,6 +16,13 @@ const techBadges = [
 ];
 
 const Home = () => {
+  useSEO({
+    title: 'Flagship AI Bot Studio',
+    description: 'Deploy professional AI bots in seconds. The ultimate studio for Telegram, Discord, and Web automation using advanced AI models.',
+    keywords: 'AI bot studio, telegram bots, discord automation, Botnoob, AI agents',
+    path: '/'
+  });
+
   const navigate = useNavigate();
   const { user, loading: authLoading } = useAuth();
   const [activePreview, setActivePreview] = useState('telegram');
@@ -124,6 +132,7 @@ const Home = () => {
           >
             <Link
               to="/docs"
+              aria-label="View documentation for version 2.0"
               className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-xs font-medium text-cyan-400 hover:border-cyan-500/50 transition-colors"
             >
               <Zap size={14} />
@@ -191,14 +200,16 @@ const Home = () => {
         </div>
 
         {/* Stack Bar */}
-        <div className="flex flex-wrap justify-center items-center gap-8 md:gap-12 opacity-70 hover:opacity-100 transition-all duration-500 py-8 border-y border-zinc-900/50 mb-20">
+        <div className="flex flex-wrap justify-center items-center gap-8 md:gap-12 opacity-70 hover:opacity-100 transition-all duration-500 py-8 border-y border-zinc-900/50 mb-20" role="list">
           {techBadges.map(({ label, icon: Icon, to, vault }) => (
             <Link
               key={label}
               to={vault ? (user ? '/dashboard?openVault=true' : '/login') : to}
+              aria-label={`Learn more about ${label}`}
               className="flex items-center gap-2 text-sm font-bold text-zinc-400 hover:text-cyan-400 transition-colors"
+              role="listitem"
             >
-              <Icon size={18} /> {label}
+              <Icon size={18} aria-hidden="true" /> {label}
             </Link>
           ))}
         </div>

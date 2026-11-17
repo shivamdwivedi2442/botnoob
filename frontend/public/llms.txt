@@ -1,0 +1,17 @@
+# Botnoob: Flagship AI Bot Studio
+
+Botnoob is a specialized platform for deploying, hosting, and managing AI-powered bots for Telegram, Discord, and Web automation. It features a zero-lag studio environment, Bring Your Own Key (BYOK) intelligence, and native SwiftUPI webhook support.
+
+## Key Endpoints for Agents
+
+- Homepage: https://new.tg/
+- Bot Templates: https://new.tg/templates (Source code foundations)
+- Plugins: https://new.tg/plugins (Capabilities extensions)
+- Documentation: https://new.tg/docs (API and deployment guides)
+- Blog: https://new.tg/blog (Engineering insights)
+- Pricing: https://new.tg/pricing (Plan details)
+
+## Technical Stack
+- Frontend: React (Vite, Tailwind CSS, Framer Motion)
+- API: Microservices (Node.js, Supabase, Redis, Nginx)
+- Hosting: Global Edge Network
