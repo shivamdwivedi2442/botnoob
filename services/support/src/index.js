@@ -1,6 +1,11 @@
 const express = require('express');
 const { Pool } = require('pg');
-const { createClient } = require('@supabase/supabase-js');
+let createClient = null;
+try {
+  ({ createClient } = require('@supabase/supabase-js'));
+} catch (err) {
+  console.error('Supabase client unavailable:', err.message);
+}
 const { securityMiddleware, z, argon2 } = require('../../shared/security');
 const { createAuthMiddleware, normalizeEmail } = require('../../shared/auth');
 const {
@@ -17,7 +22,8 @@ const connectionString = process.env.DATABASE_URL;
 const isLocalDatabase = !connectionString || /(localhost|127\.0\.0\.1|::1)/.test(connectionString);
 const pool = new Pool({
   connectionString,
-  ssl: isLocalDatabase ? undefined : { rejectUnauthorized: false }
+  ssl: isLocalDatabase ? undefined : { rejectUnauthorized: false },
+  connectionTimeoutMillis: 5000
 });
 
 app.use(express.json());
@@ -224,6 +230,9 @@ const ensureTemplateTable = async () => {
 const fallbackTemplates = () => DEFAULT_TEMPLATES.map((template) => ({ ...template }));
 
 const TEMPLATE_COLUMNS = 'id, name, platform, description, starter_code, created_at';
+let templateSource = 'default';
+let templateError = null;
+const safeHeaderValue = (value) => String(value || '').replace(/[\r\n]+/g, ' ').slice(0, 300);
 const defaultTemplateRows = () => DEFAULT_TEMPLATES.map(({ name, platform, description, starter_code }) => ({
   name,
   platform,
@@ -275,11 +284,14 @@ const getSupabaseClient = () => {
   supabaseClientLoaded = true;
 
   const config = getSupabaseAdminConfig();
-  if (!config) return null;
+  if (!config || !createClient) return null;
 
   try {
     supabaseClient = createClient(config.url, config.serviceRoleKey, {
-      auth: { persistSession: false, autoRefreshToken: false }
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: {
+        fetch: (input, init = {}) => fetch(input, { ...init, signal: AbortSignal.timeout(5000) })
+      }
     });
   } catch (err) {
     console.error('Failed to create Supabase client:', err.message);
@@ -316,6 +328,9 @@ const seedTemplates = async (client) => {
 };
 
 const loadTemplates = async () => {
+  templateError = null;
+  templateSource = 'default';
+
   const client = getSupabaseClient();
   if (client) {
     try {
@@ -324,11 +339,18 @@ const loadTemplates = async () => {
         .select(TEMPLATE_COLUMNS)
         .order('created_at', { ascending: true });
       if (error) throw new Error(error.message);
-      if (Array.isArray(data) && data.length > 0) return data;
+      if (Array.isArray(data) && data.length > 0) {
+        templateSource = 'supabase';
+        return data;
+      }
 
       const seeded = await seedTemplates(client);
-      if (seeded.length > 0) return seeded;
+      if (seeded.length > 0) {
+        templateSource = 'supabase';
+        return seeded;
+      }
     } catch (err) {
+      templateError = `Supabase: ${err.message}`;
       console.error('Supabase template fetch failed:', err.message);
     }
   }
@@ -338,11 +360,19 @@ const loadTemplates = async () => {
     const result = await pool.query(
       `SELECT ${TEMPLATE_COLUMNS} FROM bot_templates ORDER BY created_at ASC`
     );
-    if (result.rows.length > 0) return result.rows;
+    if (result.rows.length > 0) {
+      templateSource = 'postgres';
+      return result.rows;
+    }
 
     const seeded = await seedTemplates(null);
-    return seeded.length > 0 ? seeded : fallbackTemplates();
+    if (seeded.length > 0) {
+      templateSource = 'postgres';
+      return seeded;
+    }
+    return fallbackTemplates();
   } catch (err) {
+    templateError = templateError ? `${templateError}; Postgres: ${err.message}` : `Postgres: ${err.message}`;
     console.error('Template fetch failed:', err.message);
     return fallbackTemplates();
   }
@@ -731,9 +761,13 @@ app.get(['/tickets', '/api/support/tickets'], auth, async (req, res) => {
 app.get(['/templates', '/api/templates'], async (req, res) => {
   try {
     const templates = await loadTemplates();
+    res.set('X-Template-Source', templateSource);
+    if (templateError) res.set('X-Template-Error', safeHeaderValue(templateError));
     res.json(templates);
   } catch (err) {
     console.error('Template fetch failed:', err.message);
+    res.set('X-Template-Source', 'default');
+    res.set('X-Template-Error', safeHeaderValue(err.message));
     res.json(fallbackTemplates());
   }
 });
@@ -751,6 +785,7 @@ app.post(['/templates', '/api/admin/templates'], auth, requireRole(['super_admin
 
   const payload = { name, platform, description, starter_code: starterCode };
   const client = getSupabaseClient();
+  let supabaseError = null;
 
   if (client) {
     try {
@@ -762,6 +797,7 @@ app.post(['/templates', '/api/admin/templates'], auth, requireRole(['super_admin
       if (error) throw new Error(error.message);
       if (data) return res.status(201).json(data);
     } catch (err) {
+      supabaseError = err.message;
       console.error('Supabase template creation failed:', err.message);
     }
   }
@@ -774,14 +810,20 @@ app.post(['/templates', '/api/admin/templates'], auth, requireRole(['super_admin
        RETURNING ${TEMPLATE_COLUMNS}`,
       [name, platform, description, starterCode]
     );
-    res.status(201).json(result.rows[0]);
+    const created = result.rows[0];
+    if (supabaseError) created.warning = `Supabase insert failed: ${supabaseError}`;
+    res.status(201).json(created);
   } catch (err) {
     console.error('Template creation failed:', err.message);
     res.status(201).json({
       id: crypto.randomUUID(),
       ...payload,
       created_at: new Date().toISOString(),
-      persisted: false
+      persisted: false,
+      details: {
+        supabase: supabaseError || 'skipped: Supabase service credentials are not configured',
+        postgres: err.message
+      }
     });
   }
 });
@@ -793,6 +835,7 @@ app.delete(['/templates/:id', '/api/admin/templates/:id'], auth, requireRole(['s
   }
 
   const client = getSupabaseClient();
+  let supabaseError = null;
 
   if (client) {
     try {
@@ -806,6 +849,7 @@ app.delete(['/templates/:id', '/api/admin/templates/:id'], auth, requireRole(['s
         return res.json({ message: 'Template deleted' });
       }
     } catch (err) {
+      supabaseError = err.message;
       console.error('Supabase template deletion failed:', err.message);
     }
   }
@@ -813,12 +857,20 @@ app.delete(['/templates/:id', '/api/admin/templates/:id'], auth, requireRole(['s
   try {
     await ensureTemplateTable();
     const result = await pool.query('DELETE FROM bot_templates WHERE id = $1 RETURNING id', [id]);
-    if (result.rows[0]) return res.json({ message: 'Template deleted' });
+    if (result.rows[0]) {
+      return res.json({
+        message: 'Template deleted',
+        ...(supabaseError ? { warning: `Supabase delete failed: ${supabaseError}` } : {})
+      });
+    }
   } catch (err) {
     console.error('Template deletion failed:', err.message);
   }
 
-  res.json({ message: 'Template already removed' });
+  res.json({
+    message: 'Template already removed',
+    ...(supabaseError ? { details: { supabase: supabaseError } } : {})
+  });
 });
 
 app.get('/health', (req, res) => res.json({ status: 'UP', service: 'admin-service' }));

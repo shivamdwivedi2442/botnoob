@@ -100,7 +100,7 @@ CREATE TABLE support_tickets (
 );
 
 -- Bot Templates Table (Managed by Super Admin)
-CREATE TABLE bot_templates (
+CREATE TABLE IF NOT EXISTS bot_templates (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name TEXT NOT NULL,
     platform TEXT NOT NULL DEFAULT 'telegram',
@@ -108,6 +108,13 @@ CREATE TABLE bot_templates (
     starter_code TEXT DEFAULT '',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- Safe migrations if an older templates table used different column names
+ALTER TABLE bot_templates ADD COLUMN IF NOT EXISTS name TEXT;
+ALTER TABLE bot_templates ADD COLUMN IF NOT EXISTS platform TEXT DEFAULT 'telegram';
+ALTER TABLE bot_templates ADD COLUMN IF NOT EXISTS description TEXT DEFAULT '';
+ALTER TABLE bot_templates ADD COLUMN IF NOT EXISTS starter_code TEXT DEFAULT '';
+ALTER TABLE bot_templates ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();
 
 -- SwiftUPI Transactions Table
 CREATE TABLE swiftupi_transactions (
