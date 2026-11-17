@@ -25,9 +25,9 @@ function App() {
   return (
     <AuthProvider>
       <Router>
-        <div className="min-h-screen bg-obsidian flex flex-col relative overflow-hidden">
+        <div className="min-h-screen bg-obsidian flex flex-col relative overflow-x-hidden">
           <Navbar />
-          <main className="flex-grow">
+          <main className="flex-grow min-w-0">
             <Routes>
               {/* Public Pages */}
               <Route path="/" element={<><MetaTags /><Home /></>} />

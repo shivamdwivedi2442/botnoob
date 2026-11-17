@@ -2,6 +2,13 @@ const express = require('express');
 const { Pool } = require('pg');
 const { securityMiddleware, z, argon2 } = require('../../shared/security');
 const { createAuthMiddleware, normalizeEmail } = require('../../shared/auth');
+const {
+  FREE_PLAN,
+  DEFAULT_DURATION_DAYS,
+  isFreePlan,
+  ensurePlanColumns,
+  applyPaidPlan
+} = require('../../shared/plans');
 const crypto = require('crypto');
 
 const app = express();
@@ -53,6 +60,167 @@ const ensureTicketColumns = async () => {
     console.error('Failed to ensure support ticket columns:', err.message);
   }
 };
+
+const TELEGRAM_STARTER = `const token = process.env.BOT_TOKEN;
+if (!token) {
+  console.error('BOT_TOKEN is required');
+  process.exit(1);
+}
+
+let offset = 0;
+let running = true;
+
+const api = (method, body) =>
+  fetch('https://api.telegram.org/bot' + token + '/' + method, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  }).then((res) => res.json());
+
+const reply = (chatId, text) => api('sendMessage', { chat_id: chatId, text });
+
+const poll = async () => {
+  while (running) {
+    try {
+      const data = await api('getUpdates', { offset, timeout: 25 });
+      for (const update of data.result || []) {
+        offset = update.update_id + 1;
+        const message = update.message;
+        if (!message || !message.text) continue;
+        const text = message.text.trim();
+        if (text === '/start') await reply(message.chat.id, 'Welcome to ' + (process.env.BOT_NAME || 'Botnoob') + '!');
+        else if (text === '/help') await reply(message.chat.id, 'Send any message and I will echo it.');
+        else await reply(message.chat.id, 'You said: ' + text);
+      }
+    } catch (err) {
+      console.error('Polling failed:', err.message);
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+    }
+  }
+};
+
+process.on('SIGINT', () => { running = false; process.exit(0); });
+process.on('SIGTERM', () => { running = false; process.exit(0); });
+
+poll();
+`;
+
+const DISCORD_STARTER = `const token = process.env.BOT_TOKEN;
+if (!token) {
+  console.error('BOT_TOKEN is required');
+  process.exit(1);
+}
+
+const gateway = 'wss://gateway.discord.gg/?v=10&encoding=json';
+let heartbeat = null;
+let seq = null;
+
+const send = (ws, op, d) => ws.send(JSON.stringify({ op, d }));
+
+const connect = () => {
+  const ws = new WebSocket(gateway);
+
+  ws.onmessage = (event) => {
+    const payload = JSON.parse(event.data);
+    if (payload.s !== null && payload.s !== undefined) seq = payload.s;
+
+    if (payload.op === 10) {
+      heartbeat = setInterval(() => send(ws, 1, seq), payload.d.heartbeat_interval);
+      send(ws, 2, {
+        token,
+        intents: 33281,
+        properties: { os: 'linux', browser: 'botnoob', device: 'botnoob' }
+      });
+    }
+
+    if (payload.op === 7) {
+      clearInterval(heartbeat);
+      ws.close();
+    }
+
+    if (payload.t === 'MESSAGE_CREATE') {
+      const msg = payload.d;
+      if (!msg || msg.author?.bot) return;
+      const say = (content) =>
+        fetch('https://discord.com/api/v10/channels/' + msg.channel_id + '/messages', {
+          method: 'POST',
+          headers: { Authorization: 'Bot ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content })
+        });
+      if (msg.content.trim() === '.start') say('Welcome to ' + (process.env.BOT_NAME || 'Botnoob') + '!');
+      else say('You said: ' + msg.content);
+    }
+  };
+
+  ws.onclose = () => {
+    clearInterval(heartbeat);
+    setTimeout(connect, 5000);
+  };
+  ws.onerror = () => ws.close();
+};
+
+process.on('SIGINT', () => process.exit(0));
+process.on('SIGTERM', () => process.exit(0));
+
+connect();
+`;
+
+const DEFAULT_TEMPLATES = [
+  {
+    id: 'default-crypto-sentinel',
+    name: 'Crypto Sentinel',
+    platform: 'telegram',
+    description: 'Real-time price alerts & whale tracking.',
+    starter_code: TELEGRAM_STARTER,
+    is_default: true
+  },
+  {
+    id: 'default-community-guard',
+    name: 'Community Guard',
+    platform: 'discord',
+    description: 'Advanced moderation with AI sentiment analysis.',
+    starter_code: DISCORD_STARTER,
+    is_default: true
+  },
+  {
+    id: 'default-support-hero',
+    name: 'Support Hero',
+    platform: 'telegram',
+    description: 'AI-driven support ticket automation.',
+    starter_code: TELEGRAM_STARTER,
+    is_default: true
+  },
+  {
+    id: 'default-market-maker',
+    name: 'Market Maker',
+    platform: 'telegram',
+    description: 'Custom DEX trading strategies & signals.',
+    starter_code: TELEGRAM_STARTER,
+    is_default: true
+  }
+];
+
+let templateTableReady = false;
+const ensureTemplateTable = async () => {
+  if (templateTableReady) return;
+  try {
+    await pool.query(
+      `CREATE TABLE IF NOT EXISTS bot_templates (
+         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+         name TEXT NOT NULL,
+         platform TEXT NOT NULL DEFAULT 'telegram',
+         description TEXT DEFAULT '',
+         starter_code TEXT DEFAULT '',
+         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+       )`
+    );
+    templateTableReady = true;
+  } catch (err) {
+    console.error('Failed to ensure bot_templates table:', err.message);
+  }
+};
+
+const fallbackTemplates = () => DEFAULT_TEMPLATES.map((template) => ({ ...template }));
 
 const isAdminRole = (role) => ['super_admin', 'employee'].includes(role);
 
@@ -168,13 +336,30 @@ app.get('/overview', auth, requireRole(['employee', 'super_admin']), async (req,
 
 // Plan CRUD
 app.post('/pricing', auth, requireRole(['super_admin']), async (req, res) => {
-  const { plan_name, price_monthly, max_bots, features } = req.body;
+  const { plan_name, price_monthly, max_bots, features, duration_days } = req.body;
+  const parsedDuration = Number.parseInt(duration_days, 10);
+  const planDuration =
+    Number.isFinite(parsedDuration) && parsedDuration > 0 ? parsedDuration : DEFAULT_DURATION_DAYS;
+
   try {
-    const result = await pool.query(
-      `INSERT INTO pricing_configs (plan_name, price_monthly, max_bots, features)
-       VALUES ($1, $2, $3, $4) RETURNING *`,
-      [plan_name, price_monthly, max_bots, JSON.stringify(features || {})]
-    );
+    await ensurePlanColumns(pool);
+
+    let result;
+    try {
+      result = await pool.query(
+        `INSERT INTO pricing_configs (plan_name, price_monthly, max_bots, duration_days, features)
+         VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+        [plan_name, price_monthly, max_bots, planDuration, JSON.stringify(features || {})]
+      );
+    } catch (err) {
+      if (err.code !== '42703') throw err;
+      result = await pool.query(
+        `INSERT INTO pricing_configs (plan_name, price_monthly, max_bots, features)
+         VALUES ($1, $2, $3, $4) RETURNING *`,
+        [plan_name, price_monthly, max_bots, JSON.stringify(features || {})]
+      );
+    }
+
     res.status(201).json(result.rows[0]);
   } catch (err) {
     console.error('Plan creation failed:', err.message);
@@ -184,16 +369,36 @@ app.post('/pricing', auth, requireRole(['super_admin']), async (req, res) => {
 
 app.put('/pricing/:planName', auth, requireRole(['super_admin']), async (req, res) => {
   const { planName } = req.params;
-  const { price_monthly, max_bots, features } = req.body;
+  const { price_monthly, max_bots, features, duration_days } = req.body;
+  const parsedDuration = Number.parseInt(duration_days, 10);
+  const planDuration = Number.isFinite(parsedDuration) && parsedDuration > 0 ? parsedDuration : null;
+
   try {
-    const result = await pool.query(
-      `UPDATE pricing_configs 
-       SET price_monthly = COALESCE($1, price_monthly),
-           max_bots = COALESCE($2, max_bots),
-           features = COALESCE($3, features)
-       WHERE plan_name = $4 RETURNING *`,
-      [price_monthly, max_bots, features ? JSON.stringify(features) : null, planName]
-    );
+    await ensurePlanColumns(pool);
+
+    let result;
+    try {
+      result = await pool.query(
+        `UPDATE pricing_configs 
+         SET price_monthly = COALESCE($1, price_monthly),
+             max_bots = COALESCE($2, max_bots),
+             duration_days = COALESCE($3, duration_days),
+             features = COALESCE($4, features)
+         WHERE plan_name = $5 RETURNING *`,
+        [price_monthly, max_bots, planDuration, features ? JSON.stringify(features) : null, planName]
+      );
+    } catch (err) {
+      if (err.code !== '42703') throw err;
+      result = await pool.query(
+        `UPDATE pricing_configs 
+         SET price_monthly = COALESCE($1, price_monthly),
+             max_bots = COALESCE($2, max_bots),
+             features = COALESCE($3, features)
+         WHERE plan_name = $4 RETURNING *`,
+        [price_monthly, max_bots, features ? JSON.stringify(features) : null, planName]
+      );
+    }
+
     if (result.rowCount === 0) return res.status(404).json({ error: 'Plan not found' });
     res.json(result.rows[0]);
   } catch (err) {
@@ -240,14 +445,76 @@ app.patch('/coupons/:id/toggle', auth, requireRole(['super_admin']), async (req,
 // User Admin
 app.patch('/users/:id', auth, requireRole(['super_admin']), async (req, res) => {
   const { plan_tier, is_banned, role } = req.body;
+
   try {
-    const result = await pool.query(
-      `UPDATE users SET plan_tier = COALESCE($1, plan_tier), is_banned = COALESCE($2, is_banned), role = COALESCE($3, role), updated_at = NOW()
-       WHERE id::text = $4 RETURNING id, email, role, plan_tier, is_banned`,
-      [plan_tier, is_banned, role, req.params.id]
-    );
+    await ensurePlanColumns(pool);
+
+    if (plan_tier !== undefined && plan_tier !== null && plan_tier !== '') {
+      const nextPlan = isFreePlan(plan_tier) ? FREE_PLAN : plan_tier;
+
+      if (isFreePlan(nextPlan)) {
+        try {
+          await pool.query(
+            `UPDATE users
+             SET plan_tier = $1,
+                 plan_expires_at = NULL,
+                 is_banned = COALESCE($2, is_banned),
+                 role = COALESCE($3, role),
+                 updated_at = NOW()
+             WHERE id::text = $4`,
+            [nextPlan, is_banned, role, req.params.id]
+          );
+        } catch (err) {
+          if (err.code !== '42703') throw err;
+          await pool.query(
+            `UPDATE users
+             SET plan_tier = $1,
+                 is_banned = COALESCE($2, is_banned),
+                 role = COALESCE($3, role),
+                 updated_at = NOW()
+             WHERE id::text = $4`,
+            [nextPlan, is_banned, role, req.params.id]
+          );
+        }
+      } else {
+        await applyPaidPlan(pool, req.params.id, nextPlan);
+
+        if (is_banned !== undefined || role !== undefined) {
+          await pool.query(
+            `UPDATE users
+             SET is_banned = COALESCE($1, is_banned),
+                 role = COALESCE($2, role),
+                 updated_at = NOW()
+             WHERE id::text = $3`,
+            [is_banned, role, req.params.id]
+          );
+        }
+      }
+    } else {
+      await pool.query(
+        `UPDATE users SET plan_tier = COALESCE($1, plan_tier), is_banned = COALESCE($2, is_banned), role = COALESCE($3, role), updated_at = NOW()
+         WHERE id::text = $4`,
+        [plan_tier, is_banned, role, req.params.id]
+      );
+    }
+
+    let result;
+    try {
+      result = await pool.query(
+        'SELECT id, email, role, plan_tier, plan_expires_at, is_banned FROM users WHERE id::text = $1',
+        [req.params.id]
+      );
+    } catch (err) {
+      if (err.code !== '42703') throw err;
+      result = await pool.query(
+        'SELECT id, email, role, plan_tier, is_banned FROM users WHERE id::text = $1',
+        [req.params.id]
+      );
+    }
+
     res.json(result.rows[0]);
   } catch (err) {
+    console.error('User update failed:', err.message);
     res.status(500).json({ error: 'Failed to update user' });
   }
 });
@@ -370,12 +637,75 @@ app.get(['/tickets', '/api/support/tickets'], auth, async (req, res) => {
   }
 });
 
+// BOT TEMPLATES
+app.get(['/templates', '/api/templates'], async (req, res) => {
+  await ensureTemplateTable();
+  try {
+    const result = await pool.query(
+      'SELECT id, name, platform, description, starter_code, created_at FROM bot_templates ORDER BY created_at ASC'
+    );
+    if (result.rows.length === 0) return res.json(fallbackTemplates());
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Template fetch failed:', err.message);
+    res.json(fallbackTemplates());
+  }
+});
+
+app.post(['/templates', '/api/admin/templates'], auth, requireRole(['super_admin']), async (req, res) => {
+  const name = String(req.body?.name || '').trim();
+  const platform = String(req.body?.platform || 'telegram').trim().toLowerCase();
+  const description = String(req.body?.description || '').trim();
+  const starterCode = String(req.body?.starter_code || '');
+
+  if (!name) return res.status(400).json({ error: 'Template name is required' });
+  if (!['telegram', 'discord'].includes(platform)) {
+    return res.status(400).json({ error: 'Platform must be telegram or discord' });
+  }
+
+  await ensureTemplateTable();
+  try {
+    const result = await pool.query(
+      `INSERT INTO bot_templates (name, platform, description, starter_code)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, name, platform, description, starter_code, created_at`,
+      [name, platform, description, starterCode]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('Template creation failed:', err.message);
+    res.status(500).json({ error: 'Failed to create template' });
+  }
+});
+
+app.delete(['/templates/:id', '/api/admin/templates/:id'], auth, requireRole(['super_admin']), async (req, res) => {
+  const { id } = req.params;
+  if (/^default-/.test(id)) {
+    return res.status(400).json({ error: 'Built-in default templates cannot be deleted' });
+  }
+
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
+  if (!isUuid) return res.status(404).json({ error: 'Template not found' });
+
+  await ensureTemplateTable();
+  try {
+    const result = await pool.query('DELETE FROM bot_templates WHERE id = $1 RETURNING id', [id]);
+    if (!result.rows[0]) return res.status(404).json({ error: 'Template not found' });
+    res.json({ message: 'Template deleted' });
+  } catch (err) {
+    console.error('Template deletion failed:', err.message);
+    res.status(500).json({ error: 'Failed to delete template' });
+  }
+});
+
 app.get('/health', (req, res) => res.json({ status: 'UP', service: 'admin-service' }));
 
 const start = async () => {
+  await ensurePlanColumns(pool);
   try {
     await pool.query('ALTER TABLE discount_coupons ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()');
     await ensureTicketColumns();
+    await ensureTemplateTable();
   } catch (err) {
     console.warn('Migration warning:', err.message);
   }

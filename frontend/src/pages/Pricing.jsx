@@ -74,6 +74,10 @@ const Pricing = () => {
     return <Zap className="text-zinc-400" />;
   };
 
+  const activePlan = user?.plan_tier || user?.plan;
+  const planExpiresAt = user?.plan_expires_at;
+  const showExpiry = activePlan && activePlan !== 'free_byok' && activePlan !== 'free' && planExpiresAt;
+
   const formatFeatures = (p) => {
     const list = [`Up to ${p.max_bots} Bots`];
     if (p.features?.byok) list.push('Bring Your Own Keys');
@@ -92,9 +96,9 @@ const Pricing = () => {
   }
 
   return (
-    <div className="pt-24 pb-20 px-4 max-w-7xl mx-auto">
+    <div className="pt-24 pb-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto w-full">
       <div className="text-center mb-16">
-        <h1 className="text-4xl md:text-5xl font-bold mb-6">Simple, Scalable Pricing</h1>
+        <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold mb-6">Simple, Scalable Pricing</h1>
         <p className="text-zinc-500">Start for free, scale to millions. No hidden fees.</p>
       </div>
 
@@ -111,11 +115,22 @@ const Pricing = () => {
         </div>
       )}
 
+      {showExpiry && (
+        <div className="mx-auto mb-8 max-w-xl rounded-2xl border border-cyan-500/20 bg-cyan-500/10 px-4 py-3 text-center text-xs font-bold text-cyan-200">
+          Your {String(activePlan).replace(/_/g, ' ')} plan is active until{' '}
+          {new Date(planExpiresAt).toLocaleDateString(undefined, {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric'
+          })}
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-20">
         {plans.map((p) => (
           <div
             key={p.plan_name}
-            className={`relative frosted-card rounded-3xl p-8 border-zinc-800 ${
+            className={`relative frosted-card rounded-3xl p-6 sm:p-8 border-zinc-800 ${
               p.plan_name === 'byok_pro' ? 'border-cyan-500/50 shadow-[0_0_40px_rgba(6,182,212,0.1)]' : ''
             }`}
           >
@@ -132,7 +147,7 @@ const Pricing = () => {
             </div>
             <div className="mb-8">
               <span className="text-4xl font-bold">₹{p.price_monthly}</span>
-              <span className="text-zinc-500">/month</span>
+              <span className="text-zinc-500"> / {p.duration_days || 30} days</span>
             </div>
             <ul className="space-y-4 mb-10">
               {formatFeatures(p).map((f) => (

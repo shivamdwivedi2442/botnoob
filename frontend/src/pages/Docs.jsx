@@ -42,8 +42,8 @@ const Docs = () => {
   const activeLink = sections.flatMap(s => s.links).find(l => l.name === activeTab);
 
   return (
-    <div className="pt-24 pb-20 px-4 max-w-7xl mx-auto flex flex-col lg:flex-row gap-12 min-h-[70vh]">
-      <aside className="w-full lg:w-64 space-y-8">
+    <div className="pt-24 pb-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto w-full flex flex-col lg:flex-row gap-10 lg:gap-12 min-h-[70vh]">
+      <aside className="w-full lg:w-64 grid grid-cols-2 sm:grid-cols-2 lg:block gap-6 lg:space-y-8">
         {sections.map((s, i) => (
           <div key={i}>
             <div className="flex items-center gap-2 text-xs font-bold text-zinc-500 uppercase tracking-widest mb-4">
@@ -64,9 +64,9 @@ const Docs = () => {
         ))}
       </aside>
 
-      <div className="flex-grow max-w-3xl">
+      <div className="flex-grow max-w-3xl min-w-0">
         <div className="mb-12">
-          <h1 className="text-4xl font-bold mb-4">{activeTab}</h1>
+          <h1 className="text-3xl sm:text-4xl font-bold mb-4">{activeTab}</h1>
           <div className="h-1 w-20 bg-cyan-500 rounded-full mb-8"></div>
           <div className="prose prose-invert max-w-none">
             <p className="text-zinc-300 text-lg leading-relaxed whitespace-pre-line">
@@ -88,7 +88,7 @@ const Docs = () => {
           </div>
         )}
 
-        <div className="mt-16 p-8 rounded-3xl bg-zinc-900/50 border border-zinc-800">
+        <div className="mt-16 p-6 sm:p-8 rounded-3xl bg-zinc-900/50 border border-zinc-800">
           <h4 className="text-xl font-bold mb-4 flex items-center gap-2">
             <Shield size={20} className="text-cyan-400" />
             Security Notice

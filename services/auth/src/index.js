@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const { Pool } = require('pg');
 const { securityMiddleware, authLimiter, generateTokens, verifyToken, verifyTurnstile, encrypt, argon2, z } = require('../../shared/security');
 const redisClient = require('../../shared/redisClient');
+const { ensurePlanColumns, resolveUserPlan } = require('../../shared/plans');
 
 const app = express();
 const connectionString = process.env.DATABASE_URL;
@@ -76,7 +77,30 @@ const setAuthCookies = (res, accessToken, refreshToken) => {
   });
 };
 
-const publicUser = (user) => ({ id: user.id, email: user.email, role: user.role });
+const publicUser = (user) => ({
+  id: user.id,
+  email: user.email,
+  role: user.role,
+  plan: user.plan_tier ?? user.plan ?? null,
+  plan_tier: user.plan_tier ?? user.plan ?? null,
+  plan_expires_at: user.plan_expires_at ?? null,
+  max_bots: user.max_bots ?? null
+});
+
+const withLivePlan = async (user) => {
+  const planState = await resolveUserPlan(pool, user.id, {
+    plan: user.plan_tier || user.plan,
+    maxBots: user.max_bots
+  });
+
+  return {
+    ...user,
+    plan: planState.plan,
+    plan_tier: planState.plan,
+    plan_expires_at: planState.plan_expires_at,
+    max_bots: planState.max_bots
+  };
+};
 
 const getBearerToken = (req) => {
   const header = req.headers.authorization || '';
@@ -298,9 +322,21 @@ app.get('/me', async (req, res) => {
   if (token) {
     try {
       const decoded = verifyToken(token, process.env.ACCESS_TOKEN_SECRET || 'access-secret');
-      const userResult = await pool.query('SELECT id, email, role FROM users WHERE id = $1', [decoded.id]);
+      let userResult;
+      try {
+        userResult = await pool.query(
+          'SELECT id, email, role, plan_tier, plan_expires_at, is_banned FROM users WHERE id = $1',
+          [decoded.id]
+        );
+      } catch (err) {
+        if (err.code !== '42703') throw err;
+        userResult = await pool.query(
+          'SELECT id, email, role, plan_tier, is_banned FROM users WHERE id = $1',
+          [decoded.id]
+        );
+      }
       const user = userResult.rows[0];
-      if (user) return res.json(user);
+      if (user) return res.json(await withLivePlan(user));
     } catch (err) {
       // Fall through to Supabase session authentication.
     }
@@ -316,7 +352,7 @@ app.get('/me', async (req, res) => {
     }
 
     const user = await upsertSupabaseUser(supabaseUser);
-    res.json(publicUser(user));
+    res.json(await withLivePlan(publicUser(user)));
   } catch (err) {
     console.error('Session lookup failed:', err.message);
     res.status(401).json({ error: 'Invalid session' });
@@ -416,7 +452,9 @@ app.get('/health', (req, res) => res.json({ status: 'UP', service: 'auth-service
 const PORT = Number(process.env.PORT) || 4001;
 const HOST = process.env.HOST || '0.0.0.0';
 
-const start = () => {
+const start = async () => {
+  await ensurePlanColumns(pool);
+
   const server = app.listen(PORT, HOST, () => {
     console.log(`Auth Service running on ${HOST}:${PORT}`);
   });

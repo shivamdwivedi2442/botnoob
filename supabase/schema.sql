@@ -10,6 +10,7 @@ CREATE TABLE users (
     password_hash TEXT NOT NULL,
     role user_role DEFAULT 'user',
     plan_tier TEXT DEFAULT 'free_byok',
+    plan_expires_at TIMESTAMP WITH TIME ZONE,
     is_banned BOOLEAN DEFAULT false,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -65,10 +66,16 @@ CREATE TABLE pricing_configs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     plan_name TEXT UNIQUE NOT NULL,
     price_monthly NUMERIC NOT NULL,
+    duration_days INT DEFAULT 30,
     max_bots INT NOT NULL DEFAULT 10,
     features JSONB DEFAULT '{}',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- Safe migrations for existing databases (profiles are stored in the users table)
+ALTER TABLE users ADD COLUMN IF NOT EXISTS plan_expires_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE pricing_configs ADD COLUMN IF NOT EXISTS duration_days INT DEFAULT 30;
+UPDATE pricing_configs SET duration_days = 30 WHERE duration_days IS NULL;
 
 -- Discount Coupons Table
 CREATE TABLE discount_coupons (
@@ -90,6 +97,16 @@ CREATE TABLE support_tickets (
     replies JSONB DEFAULT '[]'::jsonb,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Bot Templates Table (Managed by Super Admin)
+CREATE TABLE bot_templates (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL,
+    platform TEXT NOT NULL DEFAULT 'telegram',
+    description TEXT DEFAULT '',
+    starter_code TEXT DEFAULT '',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 -- SwiftUPI Transactions Table
@@ -168,8 +185,8 @@ CREATE POLICY user_view_own_tx ON swiftupi_transactions FOR SELECT
 USING (user_id = auth.uid());
 
 -- Seed Default Pricing Plans
-INSERT INTO pricing_configs (plan_name, price_monthly, max_bots, features) VALUES
-('free_byok', 0, 10, '{"byok": true, "mcp": true, "auto_sleep": true}'),
-('byok_pro', 299, 25, '{"byok": true, "mcp": true, "uptime_24_7": true, "upi_webhooks": true}'),
-('botnoob_ultra', 999, 100, '{"built_in_ai": true, "byok": true, "priority_cpu": true, "uptime_24_7": true}')
+INSERT INTO pricing_configs (plan_name, price_monthly, duration_days, max_bots, features) VALUES
+('free_byok', 0, 30, 10, '{"byok": true, "mcp": true, "auto_sleep": true}'),
+('byok_pro', 299, 30, 25, '{"byok": true, "mcp": true, "uptime_24_7": true, "upi_webhooks": true}'),
+('botnoob_ultra', 999, 30, 100, '{"built_in_ai": true, "byok": true, "priority_cpu": true, "uptime_24_7": true}')
 ON CONFLICT (plan_name) DO NOTHING;

@@ -65,7 +65,7 @@ const Blog = () => {
   ];
 
   return (
-    <div className="pt-24 pb-20 px-4 max-w-7xl mx-auto">
+    <div className="pt-24 pb-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto w-full">
       <div className="text-center mb-20">
         <motion.h1 
           initial={{ opacity: 0, y: 20 }}
@@ -92,7 +92,7 @@ const Blog = () => {
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.1 }}
             onClick={() => setSelectedPost(p)}
-            className="group cursor-pointer frosted-card rounded-3xl p-8 border-zinc-800 hover:border-cyan-500/30 transition-all"
+            className="group cursor-pointer frosted-card rounded-3xl p-6 sm:p-8 border-zinc-800 hover:border-cyan-500/30 transition-all"
           >
             <div className="flex items-center gap-4 text-xs font-bold text-cyan-400 uppercase tracking-widest mb-4">
               <span>{p.category}</span>
@@ -151,8 +151,8 @@ const Blog = () => {
                 </button>
               </div>
               
-              <div className="p-8 overflow-y-auto custom-scrollbar">
-                <h2 className="text-3xl md:text-4xl font-bold mb-6 leading-tight">
+              <div className="p-5 sm:p-8 overflow-y-auto custom-scrollbar">
+                <h2 className="text-2xl sm:text-3xl md:text-4xl font-bold mb-6 leading-tight">
                   {selectedPost.title}
                 </h2>
                 

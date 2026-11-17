@@ -4,6 +4,7 @@ const { Pool } = require('pg');
 const { createClient } = require('@supabase/supabase-js');
 const { securityMiddleware, z } = require('../../shared/security');
 const { createAuthMiddleware } = require('../../shared/auth');
+const { ensurePlanColumns, applyPaidPlan, DEFAULT_DURATION_DAYS } = require('../../shared/plans');
 
 const app = express();
 const connectionString = process.env.DATABASE_URL;
@@ -53,7 +54,7 @@ app.use(
 securityMiddleware(app);
 
 const createOrderSchema = z.object({
-  plan_name: z.enum(['byok_pro', 'botnoob_ultra']),
+  plan_name: z.string().trim().min(1).max(64),
   coupon_code: z.string().trim().max(64).optional()
 });
 
@@ -126,15 +127,25 @@ app.get(['/plans', '/api/billing/plans'], async (req, res) => {
   }
 
   try {
-    const { data, error } = await withTimeout(
-      supabase
-        .from('pricing_configs')
-        .select('plan_name, price_monthly, max_bots, features')
-        .order('price_monthly', { ascending: true })
-        .order('plan_name', { ascending: true }),
-      SUPABASE_TIMEOUT_MS,
-      'Pricing lookup timed out'
-    );
+    const fetchPlans = (includeDuration) =>
+      withTimeout(
+        supabase
+          .from('pricing_configs')
+          .select(
+            includeDuration
+              ? 'plan_name, price_monthly, max_bots, duration_days, features'
+              : 'plan_name, price_monthly, max_bots, features'
+          )
+          .order('price_monthly', { ascending: true })
+          .order('plan_name', { ascending: true }),
+        SUPABASE_TIMEOUT_MS,
+        'Pricing lookup timed out'
+      );
+
+    let { data, error } = await fetchPlans(true);
+    if (error && /duration_days/i.test(error.message || '')) {
+      ({ data, error } = await fetchPlans(false));
+    }
 
     if (error) throw new Error(error.message);
 
@@ -143,7 +154,8 @@ app.get(['/plans', '/api/billing/plans'], async (req, res) => {
         ...plan,
         features: plan.features || {},
         price_monthly: Number(plan.price_monthly),
-        max_bots: Number(plan.max_bots)
+        max_bots: Number(plan.max_bots),
+        duration_days: Number(plan.duration_days) || DEFAULT_DURATION_DAYS
       }))
     );
   } catch (err) {
@@ -380,16 +392,30 @@ app.post(['/webhooks/swiftupi', '/api/billing/webhooks/swiftupi'], async (req, r
       [payload.utr || null, transaction.id]
     );
 
-    const planTier = PLAN_TIERS.has(transaction.plan_name)
-      ? transaction.plan_name
-      : Number(transaction.amount) >= 900
-        ? 'botnoob_ultra'
-        : 'byok_pro';
-
-    await client.query('UPDATE users SET plan_tier = $1, updated_at = NOW() WHERE id = $2', [
-      planTier,
-      transaction.user_id
+    const knownPlan = await client.query('SELECT plan_name FROM pricing_configs WHERE plan_name = $1 LIMIT 1', [
+      transaction.plan_name
     ]);
+    const planTier =
+      knownPlan.rows[0]?.plan_name ||
+      (PLAN_TIERS.has(transaction.plan_name)
+        ? transaction.plan_name
+        : Number(transaction.amount) >= 900
+          ? 'botnoob_ultra'
+          : 'byok_pro');
+
+    // Custom plans may exist before the duration column is migrated; keep the
+    // payment transaction usable even if plan expiry cannot be persisted yet.
+    await client.query('SAVEPOINT plan_activation');
+    try {
+      await applyPaidPlan(client, transaction.user_id, planTier);
+      await client.query('RELEASE SAVEPOINT plan_activation');
+    } catch (err) {
+      await client.query('ROLLBACK TO SAVEPOINT plan_activation');
+      await client.query('UPDATE users SET plan_tier = $1, updated_at = NOW() WHERE id = $2', [
+        planTier,
+        transaction.user_id
+      ]);
+    }
 
     await client.query('COMMIT');
     res.status(200).send('OK');
@@ -405,6 +431,7 @@ app.post(['/webhooks/swiftupi', '/api/billing/webhooks/swiftupi'], async (req, r
 app.get('/health', (req, res) => res.json({ status: 'UP', service: 'billing-upi-service' }));
 
 const start = async () => {
+  await ensurePlanColumns(pool);
   try {
     await pool.query('ALTER TABLE swiftupi_transactions ADD COLUMN IF NOT EXISTS plan_name TEXT');
     await pool.query('ALTER TABLE swiftupi_transactions ADD COLUMN IF NOT EXISTS gateway_payment_id TEXT');

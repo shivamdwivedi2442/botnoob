@@ -9,8 +9,8 @@ const techBadges = [
   { label: 'Telegram API', icon: MessageSquare, to: '/docs' },
   { label: 'Discord.js', icon: Globe, to: '/docs' },
   { label: 'GitHub Sync', icon: Github, to: '/templates' },
-  { label: 'Claude/Gemini BYOK', icon: Cpu, to: '/pricing' },
-  { label: 'Lovable MCP', icon: Code2, to: '/docs' },
+  { label: 'Claude/Gemini BYOK', icon: Cpu, vault: true },
+  { label: 'Lovable MCP', icon: Code2, vault: true },
   { label: 'SwiftUPI', icon: Terminal, to: '/pricing' }
 ];
 
@@ -134,7 +134,7 @@ const Home = () => {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.1 }}
-            className="text-5xl md:text-7xl font-bold tracking-tight mb-6"
+            className="text-4xl sm:text-5xl md:text-7xl font-bold tracking-tight mb-6"
           >
             Build AI Bots with <br />
             <span className="bg-gradient-to-r from-cyan-400 via-indigo-400 to-cyan-400 bg-clip-text text-transparent cyan-glow">
@@ -164,7 +164,7 @@ const Home = () => {
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
                   placeholder="Describe your bot (e.g. A crypto news bot for Telegram)..."
-                  className="w-full h-14 pl-12 pr-32 bg-zinc-900/50 border border-zinc-800 rounded-xl focus:border-cyan-500/50 outline-none text-sm transition-all"
+                  className="w-full h-14 pl-12 pr-28 sm:pr-32 bg-zinc-900/50 border border-zinc-800 rounded-xl focus:border-cyan-500/50 outline-none text-sm transition-all"
                 />
                 <Bot className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500" size={20} />
                 <button
@@ -192,10 +192,10 @@ const Home = () => {
 
         {/* Stack Bar */}
         <div className="flex flex-wrap justify-center items-center gap-8 md:gap-12 opacity-70 hover:opacity-100 transition-all duration-500 py-8 border-y border-zinc-900/50 mb-20">
-          {techBadges.map(({ label, icon: Icon, to }) => (
+          {techBadges.map(({ label, icon: Icon, to, vault }) => (
             <Link
               key={label}
-              to={to}
+              to={vault ? (user ? '/dashboard?openVault=true' : '/login') : to}
               className="flex items-center gap-2 text-sm font-bold text-zinc-400 hover:text-cyan-400 transition-colors"
             >
               <Icon size={18} /> {label}

@@ -5,6 +5,7 @@ import { Github, Mail, Eye, EyeOff, AlertCircle, ArrowRight, ShieldCheck } from 
 import { Turnstile } from '@marsidev/react-turnstile';
 import api from '../services/api';
 import Toast from '../components/Toast';
+import LegalModal from '../components/LegalModal';
 import { supabase, isSupabaseConfigured, startOAuth } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 
@@ -24,6 +25,7 @@ const Signup = () => {
   const [alreadyRegistered, setAlreadyRegistered] = useState(false);
   const [resendCooldown, setResendCooldown] = useState(0);
   const [resending, setResending] = useState(false);
+  const [legalDoc, setLegalDoc] = useState(null);
 
   const navigate = useNavigate();
   const { login } = useAuth();
@@ -232,7 +234,7 @@ const Signup = () => {
               </form>
 
               <p className="mt-8 text-center text-xs text-zinc-500">
-                By signing up, you agree to our <Link to="/terms" className="text-zinc-300 underline">Terms of Service</Link> and <Link to="/privacy" className="text-zinc-300 underline">Privacy Policy</Link>.
+                By signing up, you agree to our <button type="button" onClick={() => setLegalDoc('terms')} className="text-zinc-300 underline">Terms of Service</button> and <button type="button" onClick={() => setLegalDoc('privacy')} className="text-zinc-300 underline">Privacy Policy</button>.
               </p>
             </motion.div>
           )}
@@ -357,6 +359,7 @@ const Signup = () => {
           )}
         </AnimatePresence>
       </div>
+      <LegalModal doc={legalDoc} onClose={() => setLegalDoc(null)} />
     </div>
   );
 };

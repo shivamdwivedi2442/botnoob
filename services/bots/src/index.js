@@ -6,6 +6,7 @@ const { spawn } = require('child_process');
 const { Pool } = require('pg');
 const { securityMiddleware, encrypt, decrypt, z } = require('../../shared/security');
 const { createAuthMiddleware } = require('../../shared/auth');
+const { ensurePlanColumns, getPricingPlan, resolveUserPlan } = require('../../shared/plans');
 const redisClient = require('../../shared/redisClient');
 
 const app = express();
@@ -266,22 +267,35 @@ const updateStatus = async (botId, status) => {
 };
 
 const getPlanLimit = async (planTier) => {
-  if (PLAN_LIMITS[planTier]) return PLAN_LIMITS[planTier];
   try {
-    const result = await pool.query('SELECT max_bots FROM pricing_configs WHERE plan_name = $1', [planTier]);
-    if (result.rows[0]?.max_bots) return result.rows[0].max_bots;
+    const livePlan = await getPricingPlan(pool, planTier);
+    if (livePlan?.max_bots) return livePlan.max_bots;
   } catch (err) {
-    console.error('Failed to read plan limits:', err.message);
+    console.error('Failed to read live plan limits:', err.message);
   }
-  return PLAN_LIMITS.free_byok;
+  return PLAN_LIMITS[planTier] || PLAN_LIMITS.free_byok;
 };
 
-const getSlotInfo = async (userId, planTier) => {
+const getSlotInfo = async (userId, planTier, liveMaxBots = null) => {
+  const validLiveLimit = Number.isFinite(Number(liveMaxBots)) && Number(liveMaxBots) > 0 ? Number(liveMaxBots) : null;
   const [countResult, limit] = await Promise.all([
     pool.query('SELECT COUNT(*)::int AS count FROM bots WHERE owner_id = $1', [userId]),
-    getPlanLimit(planTier)
+    validLiveLimit ? Promise.resolve(validLiveLimit) : getPlanLimit(planTier)
   ]);
   return { used: countResult.rows[0]?.count || 0, limit };
+};
+
+const resolveRequestPlan = (user) => {
+  const profileMaxBots = Number.parseInt(user.max_bots, 10);
+  const fallbackMaxBots =
+    Number.isFinite(profileMaxBots) && profileMaxBots > 0
+      ? profileMaxBots
+      : PLAN_LIMITS[user.plan_tier] || PLAN_LIMITS.free_byok;
+
+  return resolveUserPlan(pool, user.id, {
+    plan: user.plan_tier,
+    maxBots: fallbackMaxBots
+  });
 };
 
 const safeBot = (bot, extra = {}) => ({
@@ -539,6 +553,7 @@ securityMiddleware(app);
 
 app.get('/bots', auth, async (req, res) => {
   try {
+    const planState = await resolveRequestPlan(req.user);
     const [botsResult, slots] = await Promise.all([
       pool.query(
         `SELECT DISTINCT b.*, (b.owner_id = $1) AS is_owner
@@ -548,24 +563,35 @@ app.get('/bots', auth, async (req, res) => {
          ORDER BY b.created_at DESC`,
         [req.user.id]
       ),
-      getSlotInfo(req.user.id, req.user.plan_tier)
+      getSlotInfo(req.user.id, planState.plan, planState.max_bots)
     ]);
 
     const bots = botsResult.rows.map((bot) =>
       safeBot(bot, { status: isRunning(bot.id) ? 'active' : bot.status === 'banned' ? 'banned' : 'paused' })
     );
 
-    res.json({ bots, slots });
+    res.json({
+      bots,
+      slots,
+      plan: {
+        name: planState.plan,
+        plan_tier: planState.plan,
+        expires_at: planState.plan_expires_at,
+        max_bots: slots.limit,
+        expired: planState.expired
+      }
+    });
   } catch (err) {
     console.error('Failed to list bots:', err.message);
     res.status(500).json({ error: 'Failed to load bots' });
   }
 });
 
-app.post('/bots/deploy', auth, async (req, res) => {
+const deployBot = async (req, res) => {
   try {
     const data = deploySchema.parse(req.body);
-    const slots = await getSlotInfo(req.user.id, req.user.plan_tier);
+    const planState = await resolveRequestPlan(req.user);
+    const slots = await getSlotInfo(req.user.id, planState.plan, planState.max_bots);
 
     if (slots.used >= slots.limit) {
       return res.status(403).json({
@@ -614,7 +640,7 @@ app.post('/bots/deploy', auth, async (req, res) => {
     appendLog(bot.id, `Token validated for ${identity.username || identity.displayName || data.platform}.`);
     await startBotProcess(bot, { template: data.template });
 
-    const updatedSlots = await getSlotInfo(req.user.id, req.user.plan_tier);
+    const updatedSlots = await getSlotInfo(req.user.id, planState.plan, planState.max_bots);
     res.status(201).json({
       bot: safeBot(bot, {
         status: 'active',
@@ -631,7 +657,9 @@ app.post('/bots/deploy', auth, async (req, res) => {
     console.error('Bot deployment failed:', err.message);
     res.status(500).json({ error: 'Bot deployment failed' });
   }
-});
+};
+
+app.post(['/bots', '/bots/deploy'], auth, deployBot);
 
 app.post('/bots/:id/start', auth, async (req, res) => {
   if (!isUuid(req.params.id)) return res.status(404).json({ error: 'Bot not found' });
@@ -639,6 +667,18 @@ app.post('/bots/:id/start', auth, async (req, res) => {
     const bot = await getBotForUser(req.params.id, req.user.id);
     if (!bot) return res.status(404).json({ error: 'Bot not found' });
     if (bot.status === 'banned') return res.status(403).json({ error: 'Bot is banned' });
+
+    const planState = await resolveRequestPlan(req.user);
+    const slots = await getSlotInfo(req.user.id, planState.plan, planState.max_bots);
+
+    if (slots.used >= slots.limit) {
+      return res.status(403).json({
+        error: 'Bot limit reached',
+        message: `Your plan allows ${slots.limit} bots. Stop and delete one to start a bot.`,
+        code: 'BOT_LIMIT_REACHED',
+        slots
+      });
+    }
 
     const result = await startBotProcess(bot);
     res.json({ message: result.started ? 'Bot started' : 'Bot is already running', running: true });
@@ -834,6 +874,7 @@ app.get('/health', (req, res) => res.json({ status: 'UP', service: 'bot-worker-s
 
 const start = async () => {
   await initRedis();
+  await ensurePlanColumns(pool);
   try {
     await pool.query('ALTER TABLE bots ADD COLUMN IF NOT EXISTS encrypted_env_vars TEXT');
     await pool.query('ALTER TABLE bots ADD COLUMN IF NOT EXISTS custom_code TEXT');
