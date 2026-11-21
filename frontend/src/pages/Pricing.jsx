@@ -2,8 +2,10 @@ import { Check, Zap, Rocket, Crown, Loader2, RefreshCw } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
+import Toast from '../components/Toast';
 import { useAuth } from '../context/AuthContext';
 import { useSEO } from '../hooks/useSEO';
+import { openRazorpayCheckout } from '../lib/razorpay';
 
 const Pricing = () => {
   useSEO({
@@ -18,8 +20,9 @@ const Pricing = () => {
   const [coupon, setCoupon] = useState('');
   const [loadingPlan, setLoadingPlan] = useState('');
   const [error, setError] = useState('');
+  const [toast, setToast] = useState('');
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, checkUser } = useAuth();
 
   const fetchPlans = async () => {
     try {
@@ -63,11 +66,45 @@ const Pricing = () => {
       const couponCode = coupon.trim();
       if (couponCode) payload.coupon_code = couponCode;
 
-      const res = await api.post('/billing/create-order', payload);
-      const checkoutUrl = res.data?.checkout_url;
-      if (!checkoutUrl) throw new Error('Checkout URL missing from billing response.');
+      const res = await api.post('/billing/checkout', payload);
+      const order = res.data;
+      if (!order?.order_id || !order?.key_id) {
+        throw new Error('Checkout session is missing Razorpay details.');
+      }
 
-      window.location.assign(checkoutUrl);
+      await openRazorpayCheckout({
+        order,
+        user,
+        onSuccess: async (response) => {
+          try {
+            const verify = await api.post('/billing/verify-razorpay', {
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature,
+              plan_name: order.plan_name
+            });
+
+            setToast(
+              `Payment successful! Your ${String(verify.data?.plan || order.plan_name).replace(/_/g, ' ')} plan is now active.`
+            );
+            await checkUser?.();
+          } catch (err) {
+            setError(
+              err.response?.data?.message ||
+                err.response?.data?.error ||
+                err.message ||
+                'Payment verification failed. Contact support if you were charged.'
+            );
+          } finally {
+            setLoadingPlan('');
+          }
+        },
+        onFailure: (response) => {
+          setError(response?.error?.description || 'Payment failed. Please try again.');
+          setLoadingPlan('');
+        },
+        onDismiss: () => setLoadingPlan('')
+      });
     } catch (err) {
       setError(
         err.response?.data?.message || err.response?.data?.error || err.message || 'Failed to start checkout.'
@@ -105,6 +142,7 @@ const Pricing = () => {
 
   return (
     <div className="pt-24 pb-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto w-full">
+      <Toast message={toast} variant="success" onClose={() => setToast('')} />
       <div className="text-center mb-16">
         <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold mb-6">Simple, Scalable Pricing</h1>
         <p className="text-zinc-500">Start for free, scale to millions. No hidden fees.</p>

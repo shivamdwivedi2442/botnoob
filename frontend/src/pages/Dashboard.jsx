@@ -8,6 +8,8 @@ import {
 } from 'lucide-react';
 import api from '../services/api';
 import Toast from '../components/Toast';
+import { useAuth } from '../context/AuthContext';
+import { openRazorpayCheckout } from '../lib/razorpay';
 
 const emptyBot = {
   name: '',
@@ -53,6 +55,7 @@ const Dashboard = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const { user, checkUser } = useAuth();
 
   const [bots, setBots] = useState([]);
   const [slots, setSlots] = useState({ used: 0, limit: 10 });
@@ -381,12 +384,54 @@ const Dashboard = () => {
   const startUpgrade = async (e) => {
     e.preventDefault();
     setUpgradeBusy(true);
+    setUpgradeError('');
     try {
-      const res = await api.post('/billing/create-order', { plan_name: upgradePlan, coupon_code: upgradeCoupon });
-      if (res.data?.checkout_url) window.location.assign(res.data.checkout_url);
+      const payload = { plan_name: upgradePlan };
+      const couponCode = upgradeCoupon.trim();
+      if (couponCode) payload.coupon_code = couponCode;
+
+      const res = await api.post('/billing/checkout', payload);
+      const order = res.data;
+      if (!order?.order_id || !order?.key_id) {
+        throw new Error('Checkout session is missing Razorpay details.');
+      }
+
+      await openRazorpayCheckout({
+        order,
+        user,
+        onSuccess: async (response) => {
+          try {
+            const verify = await api.post('/billing/verify-razorpay', {
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature,
+              plan_name: order.plan_name
+            });
+
+            setIsUpgradeOpen(false);
+            setUpgradeCoupon('');
+            showToast(
+              `Payment successful! Your ${String(verify.data?.plan || order.plan_name).replace(/_/g, ' ')} plan is now active.`,
+              'success'
+            );
+            await loadBots();
+            await checkUser?.();
+          } catch (err) {
+            setUpgradeError(
+              errorMessage(err, 'Payment verification failed. Contact support if you were charged.')
+            );
+          } finally {
+            setUpgradeBusy(false);
+          }
+        },
+        onFailure: (response) => {
+          setUpgradeError(response?.error?.description || 'Payment failed. Please try again.');
+          setUpgradeBusy(false);
+        },
+        onDismiss: () => setUpgradeBusy(false)
+      });
     } catch (err) {
       setUpgradeError(errorMessage(err, 'Checkout failed.'));
-    } finally {
       setUpgradeBusy(false);
     }
   };
@@ -701,7 +746,7 @@ const Dashboard = () => {
               </div>
               <input value={upgradeCoupon} onChange={(e) => setUpgradeCoupon(e.target.value)} placeholder="Coupon Code" className="w-full bg-obsidian border border-zinc-800 rounded-xl p-3 text-sm mb-6 outline-none focus:border-cyan-500" />
               {upgradeError && <p className="text-red-400 text-xs mb-4 text-center">{upgradeError}</p>}
-              <button type="submit" disabled={upgradeBusy} className="w-full py-4 bg-cyan-500 text-obsidian font-bold rounded-2xl flex items-center justify-center gap-2 transition-all hover:bg-cyan-400 disabled:opacity-50">{upgradeBusy ? <Loader2 className="animate-spin" size={20} /> : <Crown size={18} />} Pay with SwiftUPI</button>
+              <button type="submit" disabled={upgradeBusy} className="w-full py-4 bg-cyan-500 text-obsidian font-bold rounded-2xl flex items-center justify-center gap-2 transition-all hover:bg-cyan-400 disabled:opacity-50">{upgradeBusy ? <Loader2 className="animate-spin" size={20} /> : <Crown size={18} />} Pay with Razorpay</button>
             </motion.form>
           </div>
         )}

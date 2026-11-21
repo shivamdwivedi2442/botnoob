@@ -74,6 +74,7 @@ CREATE TABLE pricing_configs (
 
 -- Safe migrations for existing databases (profiles are stored in the users table)
 ALTER TABLE users ADD COLUMN IF NOT EXISTS plan_expires_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS max_bots INT;
 ALTER TABLE pricing_configs ADD COLUMN IF NOT EXISTS duration_days INT DEFAULT 30;
 UPDATE pricing_configs SET duration_days = 30 WHERE duration_days IS NULL;
 
@@ -130,8 +131,37 @@ CREATE TABLE swiftupi_transactions (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- Razorpay Orders & Payments
+CREATE TABLE IF NOT EXISTS razorpay_orders (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    order_id TEXT UNIQUE NOT NULL,
+    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    plan_name TEXT NOT NULL,
+    amount NUMERIC,
+    currency TEXT DEFAULT 'INR',
+    duration_days INT DEFAULT 30,
+    status TEXT DEFAULT 'created',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS razorpay_payments (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    payment_id TEXT UNIQUE NOT NULL,
+    order_id TEXT,
+    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    plan_name TEXT,
+    amount NUMERIC,
+    status TEXT DEFAULT 'captured',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
 -- Performance Indexes (B-Tree & Composite)
 CREATE INDEX idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_razorpay_orders_order ON razorpay_orders(order_id);
+CREATE INDEX IF NOT EXISTS idx_razorpay_payments_payment ON razorpay_payments(payment_id);
+CREATE INDEX IF NOT EXISTS idx_razorpay_payments_order ON razorpay_payments(order_id);
 CREATE INDEX idx_users_role ON users(role);
 CREATE INDEX idx_refresh_tokens_user_id ON refresh_tokens(user_id, revoked);
 CREATE INDEX idx_bots_owner_id ON bots(owner_id);

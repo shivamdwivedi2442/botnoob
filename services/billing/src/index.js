@@ -44,6 +44,11 @@ const SWIFTUPI_CHECKOUT_URL = (process.env.SWIFTUPI_CHECKOUT_URL || 'http://loca
 const PAYMENT_REDIRECT_URL = process.env.SWIFTUPI_REDIRECT_URL || 'http://localhost/dashboard?payment=success';
 const PLAN_TIERS = new Set(['byok_pro', 'botnoob_ultra']);
 
+const RAZORPAY_KEY_ID = (process.env.RAZORPAY_KEY_ID || '').trim();
+const RAZORPAY_KEY_SECRET = (process.env.RAZORPAY_KEY_SECRET || '').trim();
+const RAZORPAY_WEBHOOK_SECRET = (process.env.RAZORPAY_WEBHOOK_SECRET || '').trim();
+const RAZORPAY_API_BASE = (process.env.RAZORPAY_API_BASE || 'https://api.razorpay.com/v1').replace(/\/$/, '');
+
 app.use(
   express.json({
     verify: (req, res, buf) => {
@@ -58,7 +63,60 @@ const createOrderSchema = z.object({
   coupon_code: z.string().trim().max(64).optional()
 });
 
+const razorpayCheckoutSchema = z.object({
+  plan_name: z.string().trim().min(1).max(64),
+  coupon_code: z.string().trim().max(64).optional()
+});
+
+const razorpayVerifySchema = z.object({
+  razorpay_order_id: z.string().trim().min(1).max(128),
+  razorpay_payment_id: z.string().trim().min(1).max(128),
+  razorpay_signature: z.string().trim().min(1).max(256),
+  plan_name: z.string().trim().min(1).max(64).optional()
+});
+
 const roundAmount = (value) => Math.round(Number(value) * 100) / 100;
+
+const toPositiveInt = (value, fallback = null) => {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const safeCompare = (expected, received) => {
+  const expectedBuffer = Buffer.from(String(expected));
+  const receivedBuffer = Buffer.from(String(received));
+  return (
+    expectedBuffer.length === receivedBuffer.length &&
+    crypto.timingSafeEqual(expectedBuffer, receivedBuffer)
+  );
+};
+
+const verifyRazorpayPaymentSignature = (orderId, paymentId, signature) => {
+  const expected = crypto
+    .createHmac('sha256', RAZORPAY_KEY_SECRET)
+    .update(`${orderId}|${paymentId}`)
+    .digest('hex');
+  return safeCompare(expected, signature);
+};
+
+const fetchRazorpayOrder = async (orderId) => {
+  if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET || !orderId) return null;
+
+  try {
+    const response = await fetch(`${RAZORPAY_API_BASE}/orders/${encodeURIComponent(orderId)}`, {
+      headers: {
+        Authorization: `Basic ${Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString('base64')}`
+      },
+      signal: AbortSignal.timeout(8000)
+    });
+
+    if (!response.ok) return null;
+    return await response.json();
+  } catch (err) {
+    console.error('Failed to fetch Razorpay order:', err.message);
+    return null;
+  }
+};
 
 const escapeLike = (value) => String(value).replace(/[\\%_]/g, (char) => `\\${char}`);
 
@@ -79,6 +137,99 @@ const findCoupon = async (code) => {
 
   if (error) throw new Error(`Coupon lookup failed: ${error.message}`);
   return data || null;
+};
+
+const upgradeRazorpayPlan = async ({
+  userId,
+  planName,
+  durationDays,
+  paymentId,
+  orderId,
+  amount
+}) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const userResult = await client.query('SELECT id FROM users WHERE id::text = $1 FOR UPDATE', [userId]);
+    if (!userResult.rows[0]) {
+      await client.query('ROLLBACK');
+      return { upgraded: false, reason: 'user_not_found' };
+    }
+
+    // Razorpay can deliver both payment.captured and order.paid for the same
+    // order. Skip a second activation for an order that is already settled.
+    if (orderId) {
+      const existingPayment = await client.query(
+        `SELECT id FROM razorpay_payments WHERE order_id = $1 AND status = 'captured' LIMIT 1`,
+        [orderId]
+      );
+      if (existingPayment.rows[0]) {
+        await client.query('COMMIT');
+        return { upgraded: false, duplicate: true };
+      }
+    }
+
+    // A unique payment_id makes the upgrade idempotent even when the browser
+    // verification and the server-to-server webhook race each other.
+    const paymentInsert = await client.query(
+      `INSERT INTO razorpay_payments (payment_id, order_id, user_id, plan_name, amount, status)
+       VALUES ($1, $2, $3, $4, $5, 'captured')
+       ON CONFLICT (payment_id) DO NOTHING
+       RETURNING id`,
+      [paymentId, orderId || null, userId, planName, amount || null]
+    );
+
+    if (paymentInsert.rowCount === 0) {
+      await client.query('COMMIT');
+      return { upgraded: false, duplicate: true };
+    }
+
+    const planResult = await client.query(
+      'SELECT plan_name, max_bots, duration_days FROM pricing_configs WHERE plan_name = $1 LIMIT 1',
+      [planName]
+    );
+    const livePlan = planResult.rows[0] || null;
+    const days = toPositiveInt(livePlan?.duration_days, toPositiveInt(durationDays, DEFAULT_DURATION_DAYS));
+    const maxBots = toPositiveInt(livePlan?.max_bots, null);
+
+    await client.query(
+      `UPDATE users
+       SET plan_tier = $1,
+           plan_expires_at = NOW() + ($2::text || ' days')::interval,
+           updated_at = NOW()
+       WHERE id::text = $3`,
+      [planName, days, userId]
+    );
+
+    // Keep users.max_bots in sync when the column exists without letting a
+    // missing column abort the paid-plan activation.
+    await client.query('SAVEPOINT razorpay_max_bots');
+    try {
+      await client.query(
+        'UPDATE users SET max_bots = COALESCE($1, max_bots) WHERE id::text = $2',
+        [maxBots, userId]
+      );
+      await client.query('RELEASE SAVEPOINT razorpay_max_bots');
+    } catch (err) {
+      await client.query('ROLLBACK TO SAVEPOINT razorpay_max_bots');
+    }
+
+    if (orderId) {
+      await client.query(
+        `UPDATE razorpay_orders SET status = 'paid', updated_at = NOW() WHERE order_id = $1`,
+        [orderId]
+      );
+    }
+
+    await client.query('COMMIT');
+    return { upgraded: true, plan: planName, duration_days: days, max_bots: maxBots };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 };
 
 const markTransactionFailed = async (transactionId) => {
@@ -330,6 +481,312 @@ app.post(['/create-order', '/api/billing/create-order'], auth, async (req, res) 
   }
 });
 
+app.post(['/checkout', '/api/billing/checkout'], auth, async (req, res) => {
+  if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) {
+    return res.status(503).json({ error: 'Razorpay payment gateway is not configured' });
+  }
+
+  if (!supabase) {
+    return res.status(503).json({ error: 'Supabase is not configured' });
+  }
+
+  try {
+    const data = razorpayCheckoutSchema.parse(req.body);
+
+    const { data: plan, error: planError } = await withTimeout(
+      supabase
+        .from('pricing_configs')
+        .select('plan_name, price_monthly, duration_days, max_bots')
+        .eq('plan_name', data.plan_name)
+        .maybeSingle(),
+      SUPABASE_TIMEOUT_MS,
+      'Plan lookup timed out'
+    );
+
+    if (planError) throw new Error(planError.message);
+    if (!plan) return res.status(400).json({ error: 'Unknown pricing plan' });
+
+    const price = Number(plan.price_monthly);
+    if (!(price > 0)) {
+      return res.status(400).json({ error: 'This plan is not available for purchase' });
+    }
+
+    const durationDays = toPositiveInt(plan.duration_days, DEFAULT_DURATION_DAYS);
+
+    let discountPercent = 0;
+    let couponCode = null;
+    if (data.coupon_code) {
+      const coupon = await findCoupon(data.coupon_code);
+      if (!coupon) return res.status(400).json({ error: 'Invalid or expired coupon code' });
+      discountPercent = Number(coupon.discount_percent) || 0;
+      couponCode = coupon.code;
+    }
+
+    const baseAmount = Math.round(price * 100);
+    const amount =
+      discountPercent > 0
+        ? Math.round(baseAmount * (1 - discountPercent / 100))
+        : baseAmount;
+    if (!(amount > 0)) {
+      return res.status(400).json({ error: 'Coupon cannot reduce the order total to zero' });
+    }
+
+    const receipt = `rcpt_${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`;
+
+    let orderResponse;
+    try {
+      orderResponse = await fetch(`${RAZORPAY_API_BASE}/orders`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Basic ${Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString('base64')}`
+        },
+        body: JSON.stringify({
+          amount,
+          currency: 'INR',
+          receipt,
+          notes: {
+            user_id: String(req.user.id),
+            plan_name: plan.plan_name,
+            duration_days: String(durationDays)
+          }
+        }),
+        signal: AbortSignal.timeout(10000)
+      });
+    } catch (err) {
+      const timedOut = err.name === 'TimeoutError' || err.name === 'AbortError';
+      console.error('Razorpay order request failed:', err.message);
+      return res.status(502).json({
+        error: 'Payment gateway is unreachable',
+        message: timedOut ? 'Razorpay did not respond in time' : err.message,
+        retryable: true
+      });
+    }
+
+    const orderBody = await orderResponse.text();
+    let orderData = {};
+    try {
+      orderData = orderBody ? JSON.parse(orderBody) : {};
+    } catch (err) {
+      orderData = {};
+    }
+
+    if (!orderResponse.ok || !orderData.id) {
+      const detail =
+        orderData?.error?.description ||
+        orderData?.message ||
+        orderBody.slice(0, 300) ||
+        `HTTP ${orderResponse.status}`;
+      console.error('Razorpay order creation failed:', detail);
+      return res.status(502).json({
+        error: 'Failed to create Razorpay order',
+        message: typeof detail === 'string' ? detail : JSON.stringify(detail)
+      });
+    }
+
+    try {
+      await pool.query(
+        `INSERT INTO razorpay_orders (order_id, user_id, plan_name, amount, currency, duration_days, status)
+         VALUES ($1, $2, $3, $4, 'INR', $5, 'created')
+         ON CONFLICT (order_id) DO NOTHING`,
+        [
+          orderData.id,
+          req.user.id,
+          plan.plan_name,
+          Number(orderData.amount ?? amount),
+          durationDays
+        ]
+      );
+    } catch (err) {
+      // Order persistence is a convenience for verification/webhooks; never
+      // fail a live checkout because of it.
+      console.error('Failed to persist Razorpay order:', err.message);
+    }
+
+    res.json({
+      order_id: orderData.id,
+      amount: Number(orderData.amount ?? amount),
+      currency: 'INR',
+      key_id: RAZORPAY_KEY_ID,
+      plan_name: plan.plan_name,
+      duration_days: durationDays
+    });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ error: err.errors?.[0]?.message || 'Invalid checkout request' });
+    }
+    console.error('Razorpay checkout failed:', err.message);
+    res.status(500).json({
+      error: 'Failed to create checkout session',
+      message: err.message
+    });
+  }
+});
+
+app.post(['/verify-razorpay', '/api/billing/verify-razorpay'], auth, async (req, res) => {
+  if (!RAZORPAY_KEY_SECRET) {
+    return res.status(503).json({ error: 'Razorpay payment gateway is not configured' });
+  }
+
+  try {
+    const data = razorpayVerifySchema.parse(req.body);
+
+    if (
+      !verifyRazorpayPaymentSignature(
+        data.razorpay_order_id,
+        data.razorpay_payment_id,
+        data.razorpay_signature
+      )
+    ) {
+      return res.status(400).json({ error: 'Invalid payment signature' });
+    }
+
+    let order = null;
+    try {
+      const orderResult = await pool.query(
+        'SELECT order_id, user_id, plan_name, duration_days, amount FROM razorpay_orders WHERE order_id = $1 LIMIT 1',
+        [data.razorpay_order_id]
+      );
+      order = orderResult.rows[0] || null;
+    } catch (err) {
+      console.error('Failed to load Razorpay order:', err.message);
+    }
+
+    // If the local order row is missing (for example, persistence failed),
+    // recover the server-authored plan/user reference from Razorpay itself.
+    if (!order) {
+      const remoteOrder = await fetchRazorpayOrder(data.razorpay_order_id);
+      if (remoteOrder) {
+        const notes = remoteOrder.notes || {};
+        order = {
+          order_id: remoteOrder.id,
+          user_id: notes.user_id || null,
+          plan_name: notes.plan_name || null,
+          duration_days: notes.duration_days || null,
+          amount: remoteOrder.amount ?? null
+        };
+      }
+    }
+
+    if (order?.user_id && String(order.user_id) !== String(req.user.id)) {
+      return res.status(403).json({ error: 'This payment belongs to a different account' });
+    }
+
+    const planName = order?.plan_name || data.plan_name;
+    if (!planName) return res.status(400).json({ error: 'Missing plan reference for this payment' });
+
+    if (!order) {
+      const planResult = await pool.query(
+        'SELECT plan_name FROM pricing_configs WHERE plan_name = $1 LIMIT 1',
+        [planName]
+      );
+      if (!planResult.rows[0]) return res.status(400).json({ error: 'Unknown pricing plan' });
+    }
+
+    const result = await upgradeRazorpayPlan({
+      userId: req.user.id,
+      planName,
+      durationDays: order?.duration_days || null,
+      paymentId: data.razorpay_payment_id,
+      orderId: data.razorpay_order_id,
+      amount: order?.amount || null
+    });
+
+    if (result.reason === 'user_not_found') {
+      return res.status(404).json({ error: 'User account not found' });
+    }
+
+    res.json({
+      success: true,
+      already_processed: Boolean(result.duplicate),
+      plan: result.plan || planName,
+      duration_days: result.duration_days || null,
+      max_bots: result.max_bots ?? null
+    });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ error: err.errors?.[0]?.message || 'Invalid payment verification request' });
+    }
+    console.error('Razorpay verification failed:', err.message);
+    res.status(500).json({ error: 'Payment verification failed' });
+  }
+});
+
+app.post(['/webhook/razorpay', '/api/billing/webhook/razorpay'], async (req, res) => {
+  if (!RAZORPAY_WEBHOOK_SECRET) {
+    return res.status(500).json({ error: 'Razorpay webhook secret is not configured' });
+  }
+
+  const signature = req.headers['x-razorpay-signature'];
+  if (!signature) return res.status(401).json({ error: 'Missing signature' });
+
+  const rawBody = req.rawBody || Buffer.from(JSON.stringify(req.body || {}));
+  const expected = crypto.createHmac('sha256', RAZORPAY_WEBHOOK_SECRET).update(rawBody).digest('hex');
+  if (!safeCompare(expected, signature)) {
+    return res.status(401).json({ error: 'Invalid signature' });
+  }
+
+  const payload = req.body || {};
+  const event = String(payload.event || '');
+  if (!['payment.captured', 'order.paid'].includes(event)) {
+    return res.status(200).json({ status: 'ignored' });
+  }
+
+  const payment = payload.payload?.payment?.entity || {};
+  const order = payload.payload?.order?.entity || {};
+  const orderId = payment.order_id || order.id || null;
+  const paymentId = payment.id || (event === 'order.paid' && orderId ? `order_${orderId}` : null);
+
+  if (!paymentId) return res.status(400).json({ error: 'Missing payment reference' });
+
+  let userId = payment.notes?.user_id || order.notes?.user_id || null;
+  let planName = payment.notes?.plan_name || order.notes?.plan_name || null;
+  let durationDays = payment.notes?.duration_days || order.notes?.duration_days || null;
+  let storedOrder = null;
+
+  if (orderId) {
+    try {
+      const orderResult = await pool.query(
+        'SELECT user_id, plan_name, duration_days, amount FROM razorpay_orders WHERE order_id = $1 LIMIT 1',
+        [orderId]
+      );
+      storedOrder = orderResult.rows[0] || null;
+    } catch (err) {
+      console.error('Failed to load Razorpay order:', err.message);
+    }
+  }
+
+  if (storedOrder) {
+    userId = userId || storedOrder.user_id;
+    planName = storedOrder.plan_name || planName;
+    durationDays = storedOrder.duration_days || durationDays;
+  }
+
+  if (!userId || !planName) {
+    return res.status(400).json({ error: 'Missing payment plan or user reference' });
+  }
+
+  try {
+    const result = await upgradeRazorpayPlan({
+      userId,
+      planName,
+      durationDays,
+      paymentId,
+      orderId,
+      amount: payment.amount ?? storedOrder?.amount ?? null
+    });
+
+    if (result.reason === 'user_not_found') {
+      return res.status(404).json({ error: 'User account not found' });
+    }
+
+    return res.status(200).json({ status: 'ok', already_processed: Boolean(result.duplicate) });
+  } catch (err) {
+    console.error('Razorpay webhook failed:', err.message);
+    return res.status(500).json({ error: 'Webhook processing failed' });
+  }
+});
+
 app.post(['/webhooks/swiftupi', '/api/billing/webhooks/swiftupi'], async (req, res) => {
   const secret = process.env.SWIFTUPI_WEBHOOK_SECRET;
   const signature = req.headers['x-swiftupi-signature'];
@@ -430,6 +887,46 @@ app.post(['/webhooks/swiftupi', '/api/billing/webhooks/swiftupi'], async (req, r
 
 app.get('/health', (req, res) => res.json({ status: 'UP', service: 'billing-upi-service' }));
 
+const ensureRazorpayTables = async () => {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS razorpay_orders (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      order_id TEXT UNIQUE NOT NULL,
+      user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      plan_name TEXT NOT NULL,
+      amount NUMERIC,
+      currency TEXT DEFAULT 'INR',
+      duration_days INT DEFAULT 30,
+      status TEXT DEFAULT 'created',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS razorpay_payments (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      payment_id TEXT UNIQUE NOT NULL,
+      order_id TEXT,
+      user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      plan_name TEXT,
+      amount NUMERIC,
+      status TEXT DEFAULT 'captured',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(
+    'CREATE INDEX IF NOT EXISTS idx_razorpay_orders_order ON razorpay_orders(order_id)'
+  );
+  await pool.query(
+    'CREATE INDEX IF NOT EXISTS idx_razorpay_payments_payment ON razorpay_payments(payment_id)'
+  );
+  await pool.query(
+    'CREATE INDEX IF NOT EXISTS idx_razorpay_payments_order ON razorpay_payments(order_id)'
+  );
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS max_bots INT');
+};
+
 const start = async () => {
   await ensurePlanColumns(pool);
   try {
@@ -441,6 +938,11 @@ const start = async () => {
     );
   } catch (err) {
     console.error('Failed to ensure billing columns:', err.message);
+  }
+  try {
+    await ensureRazorpayTables();
+  } catch (err) {
+    console.error('Failed to ensure Razorpay tables:', err.message);
   }
   app.listen(4004, () => console.log('Billing Service running on port 4004'));
 };

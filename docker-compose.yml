@@ -79,6 +79,9 @@ services:
       - SWIFTUPI_WEBHOOK_SECRET=${SWIFTUPI_WEBHOOK_SECRET}
       - SWIFTUPI_CHECKOUT_URL=${SWIFTUPI_CHECKOUT_URL:-http://localhost:3000}
       - SWIFTUPI_REDIRECT_URL=${SWIFTUPI_REDIRECT_URL:-http://localhost/dashboard?payment=success}
+      - RAZORPAY_KEY_ID=${RAZORPAY_KEY_ID}
+      - RAZORPAY_KEY_SECRET=${RAZORPAY_KEY_SECRET}
+      - RAZORPAY_WEBHOOK_SECRET=${RAZORPAY_WEBHOOK_SECRET}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
