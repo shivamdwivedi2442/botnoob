@@ -5,8 +5,8 @@
 <h3>Build, deploy, and host AI-powered Telegram &amp; Discord bots<br/>without managing servers.</h3>
 
 [![Live Demo](https://img.shields.io/badge/Live-new.tg-16a34a?style=for-the-badge&logo=googlechrome&logoColor=white)](https://botnoob.new.tg)
-[![CI Quality & Security](https://github.com/shivamdwivedi2442/botnoob/actions/workflows/ci-quality-security.yml/badge.svg)](https://github.com/shivamdwivedi2442/botnoob/actions/workflows/ci-quality-security.yml)
-[![Auto Deploy to AWS](https://github.com/shivamdwivedi2442/botnoob/actions/workflows/cd-microservices-deploy.yml/badge.svg)](https://github.com/shivamdwivedi2442/botnoob/actions/workflows/cd-microservices-deploy.yml)
+[![CI Quality & Security](https://img.shields.io/github/actions/workflow/status/shivamdwivedi2442/botnoob/ci-quality-security.yml?style=for-the-badge&logo=githubactions&logoColor=white&label=CI%20Quality%20%26%20Security)](https://github.com/shivamdwivedi2442/botnoob/actions/workflows/ci-quality-security.yml)
+[![Auto Deploy to AWS](https://img.shields.io/github/actions/workflow/status/shivamdwivedi2442/botnoob/cd-microservices-deploy.yml?style=for-the-badge&logo=amazonec2&logoColor=white&label=Auto%20Deploy%20AWS)](https://github.com/shivamdwivedi2442/botnoob/actions/workflows/cd-microservices-deploy.yml)
 
 <br/>
 
@@ -35,7 +35,7 @@
 ![AWS EC2](https://img.shields.io/badge/AWS_EC2-FF9900?style=for-the-badge&logo=amazonec2&logoColor=white)
 ![Express](https://img.shields.io/badge/Express_4-000000?style=for-the-badge&logo=express&logoColor=white)
 ![JWT](https://img.shields.io/badge/JWT-000000?style=for-the-badge&logo=jsonwebtokens&logoColor=white)
-![SwiftUPI](https://img.shields.io/badge/SwiftUPI-6D28D9?style=for-the-badge&logo=stripe&logoColor=white)
+![Razorpay](https://img.shields.io/badge/Razorpay-3395FF?style=for-the-badge&logo=razorpay&logoColor=white)
 
 **8 containers · 5 Node.js microservices · 1 Nginx edge · hosted on AWS EC2**
 
@@ -99,7 +99,7 @@ flowchart TB
         MCP["MCP Endpoint<br/>/v1/:userId"]
         TG["Telegram Bot API"]
         DC["Discord Gateway API"]
-        UPI["SwiftUPI<br/>UPI payments"]
+        RZP["Razorpay<br/>Payments & UPI"]
     end
 
     subgraph Ops["Delivery"]
@@ -132,7 +132,7 @@ flowchart TB
     AI -->|personal endpoint| MCP
     BOTS -->|long polling / gateway| TG
     BOTS -->|gateway + REST| DC
-    BILL <--> UPI
+    BILL <--> RZP
 
     GHA -->|SSH deploy| EC2
     EC2 --- GW
@@ -166,7 +166,7 @@ All application containers run on **Node.js 22 Alpine**. Images are built from t
 | 2 | `auth-service` | Node.js 22 + Express | `4001` | Express, JWT access/refresh rotation, Argon2id, Redis, Supabase, Cloudflare Turnstile | Signup, login, logout, OTP verification, password sync, OAuth session exchange, `/me`, token refresh |
 | 3 | `bots-service` | Node.js 22 + Express | `4002` | Express, Telegraf, `node-telegram-bot-api`, Discord.js 14, `ws`, Docker CLI, AES-256-GCM | Bot CRUD, deploy/start/stop/restart, live logs, config, GitHub-repo bots, collaborators, isolated Docker runner |
 | 4 | `ai-proxy-service` | Node.js 22 + Express | `4003` | Express, Gemini / OpenAI / Anthropic APIs, Zod, MCP URL issuance, AES-256-GCM | Encrypted BYOK key storage, key validation, AI bot generation, MCP endpoint discovery |
-| 5 | `billing-service` | Node.js 22 + Express | `4004` | Express, SwiftUPI API, Supabase JS, HMAC webhooks | Plans, order creation, coupons, signed payment webhooks, transaction state, plan activation |
+| 5 | `billing-service` | Node.js 22 + Express | `4004` | Express, Razorpay API, Supabase JS, HMAC webhooks | Plans, order creation, coupons, signed payment webhooks, transaction state, plan activation |
 | 6 | `support-service` | Node.js 22 + Express | `4005` | Express, Express Rate Limit, Redis, Supabase JS | Support tickets/replies, bot templates, pricing configs, coupons, admin overview, role-gated endpoints |
 | 7 | `redis` | `redis:alpine` | `6379` | Redis 7 | Token/session state, rate-limit counters, caching, cross-service ephemeral data |
 | 8 | `frontend` | Multi-stage: Node 22 build → `nginx:alpine` | `5173 → 80` | React 18, Vite 5, Tailwind CSS 3, Framer Motion, Lucide, React Router 6, Axios, Supabase JS, Turnstile | Marketing site, auth screens, dashboard, AI Studio, templates, pricing, docs, admin console |
@@ -199,7 +199,7 @@ All application containers run on **Node.js 22 Alpine**. Images are built from t
 - Helmet, CORS allow-listing, per-route rate limits, Nginx rate limiting, and security headers.
 
 ### Monetization & admin
-- **SwiftUPI UPI payments** with order creation, discount coupons, signed webhook verification, and transaction reconciliation.
+- **Razorpay payments** (UPI, cards, netbanking) with order creation, discount coupons, signed webhook verification, and transaction reconciliation.
 - Plans: `free_byok`, `byok_pro`, `botnoob_ultra` — with bot limits, duration, and feature flags in `pricing_configs`.
 - **Super-admin console** for pricing, coupons, templates, users, and platform overview.
 - **Support ticketing** with threaded JSON replies, priority, and status tracking.
@@ -224,7 +224,7 @@ Botnoob/
 │   ├── auth/                        # :4001 identity service
 │   ├── bots/                        # :4002 bot lifecycle + runners
 │   ├── ai-proxy/                    # :4003 BYOK + generation + MCP
-│   ├── billing/                     # :4004 SwiftUPI billing
+│   ├── billing/                     # :4004 Razorpay billing
 │   ├── support/                     # :4005 tickets, templates, admin
 │   └── shared/                      # @botnoob/shared (auth, crypto, plans, Redis, providers)
 ├── frontend/
@@ -250,7 +250,7 @@ Botnoob/
 | Supabase project | PostgreSQL + Auth + RLS |
 | AI provider key | Gemini, OpenAI, or Anthropic (optional to boot) |
 | Cloudflare Turnstile keys | Optional for local development |
-| SwiftUPI credentials | Optional; billing endpoints return `503` when unset |
+| Razorpay credentials | Optional; billing endpoints return `503` when unset |
 | AWS EC2 instance | Required only for CD deployment |
 
 ### 1. Clone
@@ -336,6 +336,7 @@ Values are read from the repo-root `.env` by Docker Compose. `VITE_*` variables 
 | `VITE_SUPABASE_URL` | Yes | Public Supabase project URL |
 | `VITE_SUPABASE_ANON_KEY` | Yes | Public anon key; safe for browser use with RLS |
 | `VITE_TURNSTILE_SITE_KEY` | Optional | Cloudflare Turnstile site key; falls back to a test key |
+| `VITE_RAZORPAY_KEY_ID` | Optional | Public Razorpay Key ID for Checkout (`rzp_test_...` / `rzp_live_...`) |
 
 ### Bot runtime
 
@@ -350,16 +351,13 @@ Values are read from the repo-root `.env` by Docker Compose. `VITE_*` variables 
 |----------|----------|-----------------------|
 | `MCP_PUBLIC_URL` | No | Public base for personal MCP endpoints; default `https://mcp.botnoob.com` |
 
-### Billing (SwiftUPI)
+### Billing (Razorpay)
 
 | Variable | Required | Description / Example |
 |----------|----------|-----------------------|
-| `SWIFTUPI_BASE_URL` | Optional | SwiftUPI API base; default `http://host.docker.internal:5000` |
-| `SWIFTUPI_API_KEY` | Optional | SwiftUPI API key |
-| `SWIFTUPI_API_SECRET` | Optional | SwiftUPI API secret |
-| `SWIFTUPI_WEBHOOK_SECRET` | Optional | HMAC secret for `x-swiftupi-signature` verification |
-| `SWIFTUPI_CHECKOUT_URL` | Optional | Hosted checkout base; default `http://localhost:3000` |
-| `SWIFTUPI_REDIRECT_URL` | Optional | Post-payment redirect; default `http://localhost/dashboard?payment=success` |
+| `RAZORPAY_KEY_ID` | Optional | Razorpay API Key ID (`rzp_test_...` or `rzp_live_...`) |
+| `RAZORPAY_KEY_SECRET` | Optional | Razorpay API Key Secret (server-only) |
+| `RAZORPAY_WEBHOOK_SECRET` | Optional | HMAC-SHA256 secret for `x-razorpay-signature` webhook verification |
 
 ### OAuth
 
@@ -441,7 +439,7 @@ The gateway strips the `/api` prefix per service while the frontend keeps it int
 | Secrets at rest | AES-256-GCM for bot tokens, env vars, and BYOK provider keys |
 | Database | Supabase RLS policies; owners, collaborators, and users scoped to their own rows |
 | Privacy | `employee_bot_overview` view omits encrypted bot tokens |
-| Payments | HMAC-signed SwiftUPI webhook plus transaction lookup and idempotent updates |
+| Payments | HMAC-SHA256 signed Razorpay webhook (`x-razorpay-signature`) plus transaction lookup and idempotent updates |
 | Operations | Service-role key server-only; no secrets committed — use `.env` locally and GitHub secrets in CI/CD |
 
 > Operational note: the Turnstile verification function in `services/shared/security.js` is an integration stub that returns `true`. Wire it to `https://challenges.cloudflare.com/turnstile/v0/siteverify` before relying on it as a production bot defense.
