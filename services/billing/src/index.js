@@ -49,6 +49,48 @@ const RAZORPAY_KEY_SECRET = (process.env.RAZORPAY_KEY_SECRET || '').trim();
 const RAZORPAY_WEBHOOK_SECRET = (process.env.RAZORPAY_WEBHOOK_SECRET || '').trim();
 const RAZORPAY_API_BASE = (process.env.RAZORPAY_API_BASE || 'https://api.razorpay.com/v1').replace(/\/$/, '');
 
+const BREVO_API_KEY = (process.env.BREVO_API_KEY || '').trim();
+const BREVO_API_URL = (process.env.BREVO_API_URL || 'https://api.brevo.com/v3/smtp/email').replace(/\/$/, '');
+const BREVO_SENDER_EMAIL = (process.env.BREVO_SENDER_EMAIL || 'no-reply@botnoob.com').trim();
+const BREVO_SENDER_NAME = (process.env.BREVO_SENDER_NAME || 'Botnoob').trim();
+const FRONTEND_URL = (process.env.FRONTEND_URL || 'http://localhost').replace(/\/$/, '');
+const RENEWAL_WARNING_DAYS = 3;
+const DAY_MS = 86400000;
+
+const planLabelFor = (plan) => {
+  const normalized = String(plan || '').toLowerCase();
+  if (normalized.includes('ultra')) return 'Botnoob Ultra';
+  if (normalized.includes('pro')) return 'Byok Pro';
+  return 'your plan';
+};
+
+const sendBrevoEmail = async ({ to, subject, htmlContent }) => {
+  if (!BREVO_API_KEY || !to) return { sent: false, reason: 'not_configured' };
+
+  const response = await fetch(BREVO_API_URL, {
+    method: 'POST',
+    headers: {
+      'api-key': BREVO_API_KEY,
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
+    },
+    body: JSON.stringify({
+      sender: { email: BREVO_SENDER_EMAIL, name: BREVO_SENDER_NAME },
+      to: [{ email: to }],
+      subject,
+      htmlContent
+    }),
+    signal: AbortSignal.timeout(10000)
+  });
+
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    throw new Error(`Brevo responded ${response.status}: ${detail.slice(0, 200)}`);
+  }
+
+  return { sent: true };
+};
+
 app.use(
   express.json({
     verify: (req, res, buf) => {
@@ -151,7 +193,10 @@ const upgradeRazorpayPlan = async ({
   try {
     await client.query('BEGIN');
 
-    const userResult = await client.query('SELECT id FROM users WHERE id::text = $1 FOR UPDATE', [userId]);
+    const userResult = await client.query(
+      'SELECT id, plan_tier, plan_expires_at FROM users WHERE id::text = $1 FOR UPDATE',
+      [userId]
+    );
     if (!userResult.rows[0]) {
       await client.query('ROLLBACK');
       return { upgraded: false, reason: 'user_not_found' };
@@ -193,14 +238,42 @@ const upgradeRazorpayPlan = async ({
     const days = toPositiveInt(livePlan?.duration_days, toPositiveInt(durationDays, DEFAULT_DURATION_DAYS));
     const maxBots = toPositiveInt(livePlan?.max_bots, null);
 
+    // Renewing the same active plan extends the existing expiry so unused
+    // days carry forward; switching plans starts a fresh cycle from now.
+    const currentPlan = String(userResult.rows[0].plan_tier || '').trim().toLowerCase();
+    const purchasedPlan = String(planName || '').trim().toLowerCase();
+    const currentExpiry = userResult.rows[0].plan_expires_at
+      ? new Date(userResult.rows[0].plan_expires_at)
+      : null;
+    const carryForward =
+      currentPlan === purchasedPlan && currentExpiry && currentExpiry.getTime() > Date.now();
+    const baseExpiry = carryForward ? currentExpiry : null;
+
     await client.query(
       `UPDATE users
        SET plan_tier = $1,
-           plan_expires_at = NOW() + ($2::text || ' days')::interval,
+           plan_expires_at = CASE
+             WHEN $2::timestamptz IS NOT NULL
+               THEN $2::timestamptz + ($3::text || ' days')::interval
+             ELSE NOW() + ($3::text || ' days')::interval
+           END,
            updated_at = NOW()
-       WHERE id::text = $3`,
-      [planName, days, userId]
+       WHERE id::text = $4`,
+      [planName, baseExpiry, days, userId]
     );
+
+    // Reset the reminder marker for the new billing cycle without letting a
+    // missing column abort the paid-plan activation.
+    await client.query('SAVEPOINT razorpay_renewal_reset');
+    try {
+      await client.query(
+        'UPDATE users SET renewal_reminder_sent_for = NULL WHERE id::text = $1',
+        [userId]
+      );
+      await client.query('RELEASE SAVEPOINT razorpay_renewal_reset');
+    } catch (err) {
+      await client.query('ROLLBACK TO SAVEPOINT razorpay_renewal_reset');
+    }
 
     // Keep users.max_bots in sync when the column exists without letting a
     // missing column abort the paid-plan activation.
@@ -229,6 +302,89 @@ const upgradeRazorpayPlan = async ({
     throw err;
   } finally {
     client.release();
+  }
+};
+
+let reminderSweepRunning = false;
+
+const buildRenewalReminderHtml = ({ planLabel, daysLeft, expiresAt }) => {
+  const expiryText = expiresAt
+    ? new Date(expiresAt).toLocaleDateString(undefined, {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric'
+      })
+    : 'soon';
+
+  return `
+    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#18181b">
+      <h2 style="margin:0 0 8px;color:#0e7490">Your ${planLabel} plan is expiring</h2>
+      <p style="margin:0 0 16px;line-height:1.6">
+        Your ${planLabel} plan expires in <strong>${daysLeft} day${daysLeft === 1 ? '' : 's'}</strong>
+        (${expiryText}). Renew now to keep your bots running without auto-pause.
+      </p>
+      <p style="margin:0 0 24px;line-height:1.6;color:#52525b">
+        Remaining days will be added to your new plan, so you never lose paid time.
+      </p>
+      <a href="${FRONTEND_URL}/pricing" style="display:inline-block;background:#06b6d4;color:#0b0b0f;text-decoration:none;font-weight:700;padding:12px 22px;border-radius:10px">
+        Renew ${planLabel}
+      </a>
+      <p style="margin:24px 0 0;font-size:12px;color:#a1a1aa">— The Botnoob team</p>
+    </div>
+  `;
+};
+
+const sweepRenewalReminders = async () => {
+  if (reminderSweepRunning) return;
+  reminderSweepRunning = true;
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, email, plan_tier, plan_expires_at
+       FROM users
+       WHERE plan_expires_at IS NOT NULL
+         AND plan_expires_at > NOW()
+         AND plan_expires_at <= NOW() + ($1::text || ' days')::interval
+         AND LOWER(COALESCE(plan_tier, 'free')) NOT IN ('free', 'free_byok')
+         AND (renewal_reminder_sent_for IS NULL OR renewal_reminder_sent_for < plan_expires_at)`,
+      [RENEWAL_WARNING_DAYS]
+    );
+
+    for (const user of rows) {
+      const daysLeft = Math.max(
+        1,
+        Math.ceil((new Date(user.plan_expires_at).getTime() - Date.now()) / DAY_MS)
+      );
+      const planLabel = planLabelFor(user.plan_tier);
+
+      if (!BREVO_API_KEY) {
+        // Leave the reminder unmarked so it can be sent once Brevo is configured.
+        continue;
+      }
+
+      try {
+        await sendBrevoEmail({
+          to: user.email,
+          subject: `Your ${planLabel} plan expires in ${daysLeft} day${daysLeft === 1 ? '' : 's'}`,
+          htmlContent: buildRenewalReminderHtml({
+            planLabel,
+            daysLeft,
+            expiresAt: user.plan_expires_at
+          })
+        });
+        await pool.query(
+          `UPDATE users SET renewal_reminder_sent_for = plan_expires_at, updated_at = NOW() WHERE id = $1`,
+          [user.id]
+        );
+        console.log(`Sent renewal reminder to user ${user.id} (${planLabel}, ${daysLeft} day(s) left).`);
+      } catch (err) {
+        console.error(`Failed to send renewal reminder to user ${user.id}:`, err.message);
+      }
+    }
+  } catch (err) {
+    console.error('Renewal reminder sweep failed:', err.message);
+  } finally {
+    reminderSweepRunning = false;
   }
 };
 
@@ -944,6 +1100,14 @@ const start = async () => {
   } catch (err) {
     console.error('Failed to ensure Razorpay tables:', err.message);
   }
+
+  setTimeout(() => {
+    void sweepRenewalReminders();
+  }, 10000);
+  setInterval(() => {
+    void sweepRenewalReminders();
+  }, 60000);
+
   app.listen(4004, () => console.log('Billing Service running on port 4004'));
 };
 

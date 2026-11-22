@@ -119,9 +119,22 @@ const Pricing = () => {
     return <Zap className="text-zinc-400" />;
   };
 
-  const activePlan = user?.plan_tier || user?.plan;
-  const planExpiresAt = user?.plan_expires_at;
-  const showExpiry = activePlan && activePlan !== 'free_byok' && activePlan !== 'free' && planExpiresAt;
+  const normalizedPlan = String(user?.plan_tier || user?.plan || 'free').toLowerCase().trim();
+  const planExpiresAt = user?.plan_expires_at || null;
+  const isExpired = Boolean(planExpiresAt && new Date(planExpiresAt) <= new Date());
+  const planIsUltra = normalizedPlan.includes('ultra');
+  const planIsPro = normalizedPlan.includes('pro');
+  const planIsPaid = planIsUltra || planIsPro;
+  const daysLeft =
+    planExpiresAt && !isExpired
+      ? Math.ceil((new Date(planExpiresAt) - new Date()) / 86400000)
+      : 0;
+  const renewalSoon = planIsPaid && !isExpired && daysLeft > 0 && daysLeft <= 3;
+  const ultraActive = planIsUltra && !isExpired;
+  const proActive = planIsPro && !isExpired;
+  const planLabel = planIsUltra ? 'Botnoob Ultra' : planIsPro ? 'Byok Pro' : 'Plan';
+  const showExpiry = planIsPaid && planExpiresAt;
+  const showRenewalWarning = isExpired || (planIsPaid && renewalSoon);
 
   const formatFeatures = (p) => {
     const list = [`Up to ${p.max_bots} Bots`];
@@ -130,6 +143,37 @@ const Pricing = () => {
     if (p.features?.built_in_ai) list.push('Built-in AI Credits');
     if (p.features?.mcp) list.push('MCP Support');
     return list;
+  };
+
+  const getPlanAction = (plan) => {
+    const name = String(plan.plan_name || '').toLowerCase();
+    const isFree = name.includes('free');
+    const isUltra = name.includes('ultra');
+    const isPro = name.includes('pro');
+
+    if (isFree) {
+      if (ultraActive) return { label: 'Included in Ultra', disabled: true };
+      if (proActive) return { label: 'Included', disabled: true };
+      return { label: 'Get Started', disabled: false };
+    }
+
+    if (isUltra) {
+      if (ultraActive && !renewalSoon) return { label: 'Current Plan', disabled: true };
+      if (ultraActive && renewalSoon) return { label: 'Renew Botnoob Ultra', disabled: false };
+      if (proActive) return { label: 'Upgrade to Ultra', disabled: false };
+      if (isExpired) return { label: 'Renew Botnoob Ultra', disabled: false };
+      return { label: 'Upgrade Plan', disabled: false };
+    }
+
+    if (isPro) {
+      if (proActive && !renewalSoon) return { label: 'Current Plan', disabled: true };
+      if (proActive && renewalSoon) return { label: 'Renew Byok Pro', disabled: false };
+      if (ultraActive) return { label: 'Included in Ultra', disabled: true };
+      if (isExpired) return { label: 'Renew Byok Pro', disabled: false };
+      return { label: 'Upgrade Plan', disabled: false };
+    }
+
+    return { label: 'Upgrade Plan', disabled: false };
   };
 
   if (loading) {
@@ -161,9 +205,17 @@ const Pricing = () => {
         </div>
       )}
 
+      {showRenewalWarning && (
+        <div className="mx-auto mb-8 max-w-2xl rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-center text-xs font-bold text-amber-200">
+          {isExpired
+            ? `${planIsPaid ? `Your ${planLabel} plan has` : 'Your plan has'} expired — renew now to reactivate your bots. Remaining days will be added to your new plan!`
+            : `Your ${planLabel} plan expires in ${daysLeft} day${daysLeft === 1 ? '' : 's'} — renew now to keep your bots running without auto-pause. Remaining days will be added to your new plan!`}
+        </div>
+      )}
+
       {showExpiry && (
         <div className="mx-auto mb-8 max-w-xl rounded-2xl border border-cyan-500/20 bg-cyan-500/10 px-4 py-3 text-center text-xs font-bold text-cyan-200">
-          Your {String(activePlan).replace(/_/g, ' ')} plan is active until{' '}
+          Your {String(normalizedPlan).replace(/_/g, ' ')} plan is active until{' '}
           {new Date(planExpiresAt).toLocaleDateString(undefined, {
             year: 'numeric',
             month: 'short',
@@ -205,15 +257,15 @@ const Pricing = () => {
             <button
               type="button"
               onClick={() => handleCheckout(p.plan_name)}
-              disabled={loadingPlan === p.plan_name}
-              className={`w-full py-4 rounded-xl font-bold transition-all flex items-center justify-center gap-2 disabled:opacity-60 ${
-                p.plan_name === 'byok_pro'
+              disabled={getPlanAction(p).disabled || loadingPlan === p.plan_name}
+              className={`w-full py-4 rounded-xl font-bold transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed ${
+                p.plan_name === 'byok_pro' || p.plan_name === 'botnoob_ultra'
                   ? 'bg-cyan-500 text-obsidian hover:bg-cyan-400'
                   : 'bg-zinc-800 text-white hover:bg-zinc-700'
               }`}
             >
               {loadingPlan === p.plan_name && <Loader2 size={16} className="animate-spin" />}
-              {p.plan_name === 'free_byok' ? 'Get Started' : `Upgrade Plan`}
+              {getPlanAction(p).label}
             </button>
           </div>
         ))}

@@ -27,6 +27,18 @@ const ensurePlanColumns = async (db) => {
   }
 
   try {
+    await db.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS max_bots INT');
+  } catch (err) {
+    console.error('Failed to ensure users.max_bots:', err.message);
+  }
+
+  try {
+    await db.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS renewal_reminder_sent_for TIMESTAMPTZ');
+  } catch (err) {
+    console.error('Failed to ensure users.renewal_reminder_sent_for:', err.message);
+  }
+
+  try {
     await db.query('ALTER TABLE pricing_configs ADD COLUMN IF NOT EXISTS duration_days INT DEFAULT 30');
     await db.query('UPDATE pricing_configs SET duration_days = 30 WHERE duration_days IS NULL');
     pricingReady = true;

@@ -6,7 +6,7 @@ const { spawn } = require('child_process');
 const { Pool } = require('pg');
 const { securityMiddleware, encrypt, decrypt, z } = require('../../shared/security');
 const { createAuthMiddleware } = require('../../shared/auth');
-const { ensurePlanColumns, getPricingPlan, resolveUserPlan } = require('../../shared/plans');
+const { ensurePlanColumns, getPricingPlan, resolveUserPlan, FREE_PLAN } = require('../../shared/plans');
 const redisClient = require('../../shared/redisClient');
 
 const app = express();
@@ -600,6 +600,66 @@ const isRunning = (botId) => {
   return Boolean(entry?.process && entry.process.exitCode === null);
 };
 
+let expirySweepRunning = false;
+
+const pauseAllUserBots = async (userId) => {
+  const result = await pool.query(
+    `SELECT id FROM bots WHERE owner_id = $1 AND status <> 'paused'`,
+    [userId]
+  );
+
+  for (const row of result.rows) {
+    try {
+      await stopBotProcess(row.id);
+    } catch (err) {
+      console.error(`Failed to pause bot ${row.id} after plan expiry:`, err.message);
+    }
+  }
+
+  await pool.query(
+    `UPDATE bots SET status = 'paused', updated_at = NOW()
+     WHERE owner_id = $1 AND status <> 'paused'`,
+    [userId]
+  );
+};
+
+const sweepExpiredPlans = async () => {
+  if (expirySweepRunning) return;
+  expirySweepRunning = true;
+
+  try {
+    const freeLimit = await getPlanLimit(FREE_PLAN);
+    const expired = await pool.query(
+      `SELECT id, plan_tier
+       FROM users
+       WHERE plan_expires_at IS NOT NULL
+         AND plan_expires_at <= NOW()
+         AND LOWER(COALESCE(plan_tier, 'free')) NOT IN ('free', 'free_byok')`
+    );
+
+    for (const user of expired.rows) {
+      try {
+        await pool.query(
+          `UPDATE users
+           SET plan_tier = $1, max_bots = $2, updated_at = NOW()
+           WHERE id = $3`,
+          [FREE_PLAN, freeLimit, user.id]
+        );
+        await pauseAllUserBots(user.id);
+        console.log(
+          `Plan ${user.plan_tier} expired for user ${user.id}; paused bots and downgraded to ${FREE_PLAN}.`
+        );
+      } catch (err) {
+        console.error(`Failed to expire plan for user ${user.id}:`, err.message);
+      }
+    }
+  } catch (err) {
+    console.error('Plan expiry sweep failed:', err.message);
+  } finally {
+    expirySweepRunning = false;
+  }
+};
+
 const deploySchema = z.object({
   name: z.string().trim().min(1).max(80),
   platform: z.enum(['telegram', 'discord']),
@@ -772,6 +832,26 @@ app.post('/bots/:id/start', auth, async (req, res) => {
     if (bot.status === 'banned') return res.status(403).json({ error: 'Bot is banned' });
 
     const planState = await resolveRequestPlan(req.user);
+
+    if (planState.expired) {
+      const freeLimit = await getPlanLimit(FREE_PLAN);
+      const activeResult = await pool.query(
+        `SELECT COUNT(*)::int AS count FROM bots WHERE owner_id = $1 AND status = 'active'`,
+        [req.user.id]
+      );
+      const activeCount = activeResult.rows[0]?.count || 0;
+
+      if (activeCount >= freeLimit) {
+        return res.status(403).json({
+          error: 'Plan expired',
+          message: `Your paid plan has expired. The Free tier allows ${freeLimit} active bots; renew your plan or pause a bot before starting another.`,
+          code: 'PLAN_EXPIRED',
+          active_bots: activeCount,
+          limit: freeLimit
+        });
+      }
+    }
+
     const slots = await getSlotInfo(req.user.id, planState.plan, planState.max_bots);
 
     if (slots.used >= slots.limit) {
@@ -989,6 +1069,14 @@ const start = async () => {
   } catch (err) {
     console.error('Failed to reset bot states:', err.message);
   }
+
+  setTimeout(() => {
+    void sweepExpiredPlans();
+  }, 5000);
+  setInterval(() => {
+    void sweepExpiredPlans();
+  }, 60000);
+
   app.listen(4002, () => console.log('Bot Worker running on port 4002'));
 };
 

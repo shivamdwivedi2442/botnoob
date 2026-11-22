@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Plus, Github, MessageSquare, Globe, Eye, EyeOff, Cpu, RotateCw, Trash2,
   Terminal, Code2, X, Copy, KeyRound, Loader2, AlertCircle, Crown, LifeBuoy,
-  Send, FileKey, Save, RefreshCw, ShieldCheck
+  Send, FileKey, Save, RefreshCw, ShieldCheck, Bell, AlertTriangle
 } from 'lucide-react';
 import api from '../services/api';
 import Toast from '../components/Toast';
@@ -375,8 +375,9 @@ const Dashboard = () => {
     }
   };
 
-  const openUpgrade = () => {
+  const openUpgrade = (planName) => {
     setUpgradeError('');
+    if (planName) setUpgradePlan(planName);
     setIsUpgradeOpen(true);
     loadPlans();
   };
@@ -555,9 +556,60 @@ const Dashboard = () => {
     setLogsBot(bot);
   };
 
+  const rawPlan = user?.plan_tier || user?.plan || activePlan?.name || 'free';
+  const normalizedPlan = String(rawPlan).toLowerCase().trim();
+  const planExpiresAt = user?.plan_expires_at || activePlan?.expires_at || null;
+  const isExpired = Boolean(planExpiresAt && new Date(planExpiresAt) <= new Date());
+  const planIsUltra = normalizedPlan.includes('ultra');
+  const planIsPro = normalizedPlan.includes('pro');
+  const planIsPaid = planIsUltra || planIsPro;
+  const daysLeft =
+    planExpiresAt && !isExpired
+      ? Math.ceil((new Date(planExpiresAt) - new Date()) / 86400000)
+      : 0;
+  const renewalSoon = planIsPaid && !isExpired && daysLeft > 0 && daysLeft <= 3;
+  const renewalNeeded = planIsPaid && (isExpired || renewalSoon);
+  const showRenewalAlert = renewalNeeded || isExpired;
+  const planLabel = planIsUltra ? 'Botnoob Ultra' : planIsPro ? 'Byok Pro' : 'Plan';
+  const ultraActive = planIsUltra && !renewalNeeded;
+  const renewTargetPlan = planIsUltra ? 'botnoob_ultra' : 'byok_pro';
+
+  const visibleUpgradePlans = livePlans.filter((plan) => {
+    const name = String(plan.plan_name || '').toLowerCase();
+    if (planIsUltra) return name.includes('ultra');
+    if (planIsPro && !renewalNeeded) return name.includes('ultra');
+    return true;
+  });
+
+  useEffect(() => {
+    if (visibleUpgradePlans.length === 0) return;
+    if (!visibleUpgradePlans.some((plan) => plan.plan_name === upgradePlan)) {
+      setUpgradePlan(visibleUpgradePlans[0].plan_name);
+    }
+  }, [visibleUpgradePlans, upgradePlan]);
+
   return (
     <div className="pt-24 pb-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto w-full">
       <Toast message={toast} variant={toastVariant} onClose={() => setToast('')} />
+
+      {showRenewalAlert && (
+        <div className="mb-8 rounded-2xl border border-amber-500/30 bg-gradient-to-r from-amber-500/15 via-red-500/10 to-amber-500/15 px-4 sm:px-6 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="text-amber-400 shrink-0 mt-0.5" size={20} />
+            <p className="text-sm font-bold text-amber-100 leading-relaxed">
+              {isExpired
+                ? 'Your plan has expired — renew now to keep your bots running without auto-pause. Remaining days will be added to your new plan!'
+                : `Your plan expires in ${daysLeft} day${daysLeft === 1 ? '' : 's'} — renew now to keep your bots running without auto-pause. Remaining days will be added to your new plan!`}
+            </p>
+          </div>
+          <button
+            onClick={() => openUpgrade(planIsPaid ? renewTargetPlan : 'byok_pro')}
+            className="shrink-0 px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-obsidian text-xs font-bold transition-all flex items-center justify-center gap-2"
+          >
+            <RefreshCw size={14} /> {planIsPaid ? `Renew ${planLabel}` : 'Renew Plan'}
+          </button>
+        </div>
+      )}
 
       <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6 mb-12">
         <div>
@@ -583,13 +635,54 @@ const Dashboard = () => {
             )}
           </p>
         </div>
-        <div className="flex flex-wrap gap-3 w-full md:w-auto">
+        <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
           <button onClick={() => setIsSupportOpen(true)} className="px-4 py-2 bg-indigo-500/10 border border-indigo-500/30 rounded-xl text-xs font-bold text-indigo-300 hover:bg-indigo-500/20 transition-all flex items-center gap-2">
             <LifeBuoy size={14} /> Support / Help
           </button>
-          <button onClick={openUpgrade} className="px-4 py-2 bg-cyan-500/10 border border-cyan-500/30 rounded-xl text-xs font-bold text-cyan-300 hover:bg-cyan-500/20 transition-all flex items-center gap-2">
-            <Crown size={14} /> Upgrade Plan
-          </button>
+
+          {showRenewalAlert && (
+            <button
+              type="button"
+              onClick={() => openUpgrade(planIsPaid ? renewTargetPlan : 'byok_pro')}
+              title={isExpired ? 'Your plan has expired — renew now' : `Your plan expires in ${daysLeft} day${daysLeft === 1 ? '' : 's'}`}
+              aria-label="Renewal notification"
+              className="relative p-2 bg-red-500/10 border border-red-500/30 rounded-xl text-red-300 hover:bg-red-500/20 transition-all flex items-center justify-center"
+            >
+              <Bell size={14} />
+              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" />
+            </button>
+          )}
+
+          {ultraActive && (
+            <div className="px-4 py-2 rounded-xl border border-emerald-400/30 bg-gradient-to-r from-emerald-500/15 to-cyan-500/15 text-xs font-bold text-emerald-300 flex items-center gap-2 shadow-[0_0_20px_rgba(16,185,129,0.15)]">
+              <Crown size={14} /> Ultra Active
+            </div>
+          )}
+
+          {renewalNeeded && (
+            <button onClick={() => openUpgrade(renewTargetPlan)} className="px-4 py-2 bg-amber-500/10 border border-amber-500/30 rounded-xl text-xs font-bold text-amber-300 hover:bg-amber-500/20 transition-all flex items-center gap-2">
+              <RefreshCw size={14} /> Renew {planLabel}
+            </button>
+          )}
+
+          {planIsPro && (
+            <button onClick={() => openUpgrade('botnoob_ultra')} className="px-4 py-2 bg-cyan-500/10 border border-cyan-500/30 rounded-xl text-xs font-bold text-cyan-300 hover:bg-cyan-500/20 transition-all flex items-center gap-2">
+              <Crown size={14} /> Upgrade to Ultra
+            </button>
+          )}
+
+          {!planIsPaid && !isExpired && (
+            <button onClick={() => openUpgrade('byok_pro')} className="px-4 py-2 bg-cyan-500/10 border border-cyan-500/30 rounded-xl text-xs font-bold text-cyan-300 hover:bg-cyan-500/20 transition-all flex items-center gap-2">
+              <Crown size={14} /> Upgrade Plan
+            </button>
+          )}
+
+          {!planIsPaid && isExpired && (
+            <button onClick={() => openUpgrade('byok_pro')} className="px-4 py-2 bg-amber-500/10 border border-amber-500/30 rounded-xl text-xs font-bold text-amber-300 hover:bg-amber-500/20 transition-all flex items-center gap-2">
+              <RefreshCw size={14} /> Renew Plan
+            </button>
+          )}
+
           <button onClick={() => setIsByokModalOpen(true)} className="px-4 py-2 bg-zinc-900 border border-zinc-800 rounded-xl text-xs font-bold text-zinc-300 hover:border-cyan-500/50 transition-all flex items-center gap-2">
             <Cpu size={14} /> BYOK & MCP
           </button>
@@ -730,23 +823,38 @@ const Dashboard = () => {
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsUpgradeOpen(false)} className="absolute inset-0 bg-obsidian/85 backdrop-blur-sm"></motion.div>
             <motion.form onSubmit={startUpgrade} initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className={`${modalCard} max-w-lg max-h-[90vh] overflow-y-auto custom-scrollbar p-6 sm:p-8`}>
               <div className="flex justify-between items-center mb-6">
-                <h3 className="text-xl font-bold flex items-center gap-2"><Crown className="text-cyan-400" /> Upgrade Plan</h3>
+                <h3 className="text-xl font-bold flex items-center gap-2"><Crown className="text-cyan-400" /> {renewalNeeded ? `Renew ${planLabel}` : 'Upgrade Plan'}</h3>
                 <button type="button" onClick={() => setIsUpgradeOpen(false)} className="text-zinc-500 hover:text-white"><X /></button>
               </div>
               <div className="space-y-3 mb-6">
-                {livePlans.length === 0 && (
+                {visibleUpgradePlans.length === 0 && (
                   <p className="text-xs text-zinc-500 text-center py-4">Live plans are unavailable right now. Please try again in a moment.</p>
                 )}
-                {livePlans.map(p => (
-                  <button key={p.plan_name} type="button" onClick={() => setUpgradePlan(p.plan_name)} className={`w-full p-4 rounded-2xl border text-left transition-all ${upgradePlan === p.plan_name ? 'border-cyan-500 bg-cyan-500/10' : 'border-zinc-800 bg-obsidian'}`}>
-                    <div className="flex justify-between items-center font-bold mb-1"><span className="capitalize">{p.plan_name.replace('_', ' ')}</span><span className="text-cyan-400">₹{p.price_monthly} / {p.duration_days || 30} days</span></div>
-                    <p className="text-[10px] text-zinc-500">Up to {p.max_bots} concurrent bots with priority CPU.</p>
-                  </button>
-                ))}
+                {visibleUpgradePlans.map((p) => {
+                  const planName = String(p.plan_name || '').toLowerCase();
+                  const isCurrentPlan = planName === normalizedPlan;
+                  return (
+                    <button key={p.plan_name} type="button" onClick={() => setUpgradePlan(p.plan_name)} className={`w-full p-4 rounded-2xl border text-left transition-all ${upgradePlan === p.plan_name ? 'border-cyan-500 bg-cyan-500/10' : 'border-zinc-800 bg-obsidian'}`}>
+                      <div className="flex justify-between items-center font-bold mb-1"><span className="capitalize">{p.plan_name.replace('_', ' ')}</span><span className="text-cyan-400">₹{p.price_monthly} / {p.duration_days || 30} days</span></div>
+                      <p className="text-[10px] text-zinc-500">
+                        {renewalNeeded && isCurrentPlan
+                          ? 'Renew now and carry forward your remaining days.'
+                          : `Up to ${p.max_bots} concurrent bots with priority CPU.`}
+                      </p>
+                    </button>
+                  );
+                })}
               </div>
               <input value={upgradeCoupon} onChange={(e) => setUpgradeCoupon(e.target.value)} placeholder="Coupon Code" className="w-full bg-obsidian border border-zinc-800 rounded-xl p-3 text-sm mb-6 outline-none focus:border-cyan-500" />
               {upgradeError && <p className="text-red-400 text-xs mb-4 text-center">{upgradeError}</p>}
-              <button type="submit" disabled={upgradeBusy} className="w-full py-4 bg-cyan-500 text-obsidian font-bold rounded-2xl flex items-center justify-center gap-2 transition-all hover:bg-cyan-400 disabled:opacity-50">{upgradeBusy ? <Loader2 className="animate-spin" size={20} /> : <Crown size={18} />} Pay with Razorpay</button>
+              <button type="submit" disabled={upgradeBusy} className="w-full py-4 bg-cyan-500 text-obsidian font-bold rounded-2xl flex items-center justify-center gap-2 transition-all hover:bg-cyan-400 disabled:opacity-50">
+                {upgradeBusy ? <Loader2 className="animate-spin" size={20} /> : <Crown size={18} />}
+                {renewalNeeded && String(upgradePlan).toLowerCase() === normalizedPlan
+                  ? `Renew ${planLabel}`
+                  : String(upgradePlan).toLowerCase().includes('ultra')
+                    ? 'Upgrade to Ultra'
+                    : 'Pay with Razorpay'}
+              </button>
             </motion.form>
           </div>
         )}
